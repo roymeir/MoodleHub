@@ -1,10 +1,12 @@
 {
   "name": "Moodle Hub",
+  "lang": "he",
+  "dir": "rtl",
   "short_name": "Moodle Hub",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f7f5f0",
-  "theme_color": "#f7f5f0",
+  "background_color": "#f4f8fd",
+  "theme_color": "#f4f8fd",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
     { "src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png" },

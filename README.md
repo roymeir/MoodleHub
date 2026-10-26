@@ -1,5 +1,7 @@
 # Moodle Hub
 
+The interface is in Hebrew, right-to-left.
+
 Your own replacement for the Moodle website. It runs on one computer, checks Moodle every 15 minutes, and gives you:
 
 - **Today:** what's due, with countdowns and a Submit button

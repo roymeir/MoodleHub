@@ -81,14 +81,14 @@ def parse_token(text):
         try:
             decoded = base64.b64decode(b.replace("-", "+").replace("_", "/")).decode()
         except Exception:
-            raise ValueError("That link doesn't contain a readable token. Copy the whole moodlemobile://token=… text.")
+            raise ValueError("לא נמצא טוקן תקין בקישור. העתיקו את כל הערך שמתחיל ב-moodlemobile://token=")
         parts = decoded.split(":::")
         if len(parts) >= 2 and re.fullmatch(r"[a-f0-9]{32}", parts[1]):
             return parts[1]
-        raise ValueError("That link doesn't contain a readable token.")
+        raise ValueError("לא נמצא טוקן תקין בקישור.")
     if re.fullmatch(r"[a-f0-9]{32}", text):
         return text
-    raise ValueError("Paste the moodlemobile://token=… link (or a 32-character token).")
+    raise ValueError("הדביקו את הערך שמתחיל ב-moodlemobile://token=")
 
 # ───────────────────────────── database ─────────────────────────────
 
@@ -168,7 +168,7 @@ class Moodle:
             with urllib.request.urlopen(req, timeout=60) as r:
                 data = json.loads(r.read().decode("utf-8"))
         except urllib.error.URLError as e:
-            raise MoodleError(f"Can't reach Moodle ({e.reason if hasattr(e,'reason') else e})", "network")
+            raise MoodleError(f"אין חיבור למודל ({e.reason if hasattr(e,'reason') else e})", "network")
         if isinstance(data, dict) and data.get("exception"):
             raise MoodleError(data.get("message", "Moodle error"), data.get("errorcode", ""))
         return data
@@ -254,7 +254,7 @@ def claude_summary(cfg, title, course, text):
         "messages": [{"role": "user", "content":
             f"This is course material titled '{title}' from the university course '{course}'. "
             "Summarize what it covers in 2-3 plain sentences for a student deciding what to study. "
-            "If it's an assignment, say what is being asked. Reply in English, no preamble.\n\n" + text}],
+            "If it's an assignment, say what is being asked. Reply in Hebrew, no preamble.\n\n" + text}],
     }).encode()
     req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=body, headers={
         "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"})
@@ -333,7 +333,7 @@ def collect(m):
         except MoodleError as e:
             log(f"contents for course {cid} failed: {e}"); continue
         for si, sec in enumerate(sections):
-            sname = sec.get("name") or f"Section {si}"
+            sname = sec.get("name") or f"יחידה {si}"
             for mod in sec.get("modules", []):
                 if mod.get("visible") == 0 or mod.get("uservisible") is False:
                     continue
@@ -433,7 +433,7 @@ def collect(m):
         ov = m.call("gradereport_overview_get_course_grades", userid=uid)
         for g in ov.get("grades", []):
             if g.get("courseid") in cmap and g.get("grade") not in (None, "", "-"):
-                add(f"cgrade-{g['courseid']}", "coursegrade", g["courseid"], {"title": "Course total",
+                add(f"cgrade-{g['courseid']}", "coursegrade", g["courseid"], {"title": "ציון סופי",
                     "grade": g.get("grade")})
     except MoodleError:
         pass
@@ -454,10 +454,12 @@ def collect(m):
 
     return site, items
 
+HE_DAYS = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
+
 def fmt_due(ts):
-    if not ts: return "no due date"
+    if not ts: return "ללא תאריך"
     d = datetime.fromtimestamp(ts)
-    return d.strftime("%a %d %b, %H:%M")
+    return f"יום {HE_DAYS[d.weekday()]} {d.day}.{d.month} בשעה {d:%H:%M}"
 
 def sync(cfg, reason="scheduled"):
     if not cfg.get("token"):
@@ -503,9 +505,9 @@ def sync(cfg, reason="scheduled"):
         if first:
             n_tasks = sum(1 for i in items.values() if i["kind"] == "task")
             n_files = sum(1 for i in items.values() if i["kind"] == "file")
-            notify(cfg, "Moodle Hub is connected",
-                   f"Synced {len([i for i in items.values() if i['kind']=='course'])} courses, "
-                   f"{n_tasks} tasks and {n_files} files. You'll get a push when something new appears.",
+            notify(cfg, "Moodle Hub מחובר",
+                   f"סונכרנו {len([i for i in items.values() if i['kind']=='course'])} קורסים, "
+                   f"{n_tasks} מטלות ו-{n_files} קבצים. תקבלו התראה כשמשהו חדש יעלה.",
                    tags=["white_check_mark"])
         else:
             send_change_notifications(cfg, changes)
@@ -522,15 +524,15 @@ def sync(cfg, reason="scheduled"):
     except MoodleError as e:
         msg = str(e)
         if e.code in ("invalidtoken", "accessexception") or "token" in msg.lower():
-            msg = "Moodle sign-in expired. Open the Hub on this computer and reconnect Moodle."
+            msg = "ההתחברות למודל פגה. פתחו את ה-Hub במחשב והתחברו מחדש למודל (בהגדרות)."
             if meta_get("token_alert_sent") != cfg["token"]:
-                notify(cfg, "Moodle Hub needs you", msg, priority=4, tags=["warning"])
+                notify(cfg, "Moodle Hub צריך אותך", msg, priority=4, tags=["warning"])
                 meta_set("token_alert_sent", cfg["token"])
         sync_state["error"] = msg
         meta_set("last_error", msg)
         log("sync failed:", msg)
     except Exception as e:
-        sync_state["error"] = f"Unexpected error: {e}"
+        sync_state["error"] = f"שגיאה לא צפויה: {e}"
         meta_set("last_error", sync_state["error"])
         traceback.print_exc()
     finally:
@@ -543,17 +545,17 @@ def send_change_notifications(cfg, changes):
     for kind, it, prev in changes:
         d, c = it["data"], short(it["course"], 28)
         if kind == "new" and it["kind"] == "task":
-            lines.append(f"📝 New task in {c}: {d['title']} — due {fmt_due(d.get('due'))}")
+            lines.append(f"📝 מטלה חדשה ב{c}: {d['title']} — להגשה {fmt_due(d.get('due'))}")
             urgent = True
         elif kind == "due":
-            lines.append(f"📅 Deadline moved ({c}): {d['title']} — now {fmt_due(d.get('due'))}")
+            lines.append(f"📅 מועד ההגשה השתנה ({c}): {d['title']} — עכשיו {fmt_due(d.get('due'))}")
             urgent = True
         elif kind == "new" and it["kind"] == "news":
             lines.append(f"📣 {c}: {d['title']} — {short(d.get('text'), 110)}")
         elif kind == "new" and it["kind"] in ("file", "material"):
-            lines.append(f"📄 New in {c}: {d['title']}")
+            lines.append(f"📄 חדש ב{c}: {d['title']}")
         elif kind in ("grade",) or (kind == "new" and it["kind"] == "grade"):
-            lines.append(f"🎓 Grade posted ({c}): {d['title']} — {d.get('grade')}")
+            lines.append(f"🎓 פורסם ציון ({c}): {d['title']} — {d.get('grade')}")
             urgent = True
     if not lines:
         return
@@ -565,8 +567,8 @@ def send_change_notifications(cfg, changes):
         return
     lines = meta_get("pending_push", []) + lines
     meta_set("pending_push", [])
-    title = lines[0].split(" ", 1)[1].split(":")[0] if len(lines) == 1 else f"{len(lines)} updates from Moodle"
-    body = "\n".join(lines[:8]) + (f"\n+{len(lines)-8} more" if len(lines) > 8 else "")
+    title = "עדכון ממודל" if len(lines) == 1 else f"{len(lines)} עדכונים ממודל"
+    body = "\n".join(lines[:8]) + (f"\nועוד {len(lines)-8}" if len(lines) > 8 else "")
     notify(cfg, title, body, priority=4 if urgent else 3, tags=["books"])
 
 def send_reminders(cfg):
@@ -587,9 +589,9 @@ def send_reminders(cfg):
         if win == "3h":  # inside 3h the 24h reminder is no longer useful
             q("INSERT OR IGNORE INTO reminders(task_id,win) VALUES(?,?)", (r["id"], "24h"))
         hrs = int(left // 3600)
-        when = f"in {hrs}h" if hrs >= 1 else f"in {int(left//60)} min"
-        notify(cfg, f"Due {when}: {d['title']}",
-               f"{r['course']} · {fmt_due(due)}" + ("" if d.get("source") != "Moodle" else " · not submitted yet"),
+        when = f"בעוד {hrs} שעות" if hrs >= 1 else f"בעוד {int(left//60)} דקות"
+        notify(cfg, f"להגשה {when}: {d['title']}",
+               f"{r['course']} · {fmt_due(due)}" + ("" if d.get("source") != "Moodle" else " · עדיין לא הוגש"),
                url=d.get("link"), priority=5 if win == "3h" else 4, tags=["alarm_clock"])
 
 def sync_loop():
@@ -651,17 +653,46 @@ def state():
                    "can_summarize": bool(cfg.get("anthropic_api_key")), "now": time.time()}
     return out
 
+def _private(ip):
+    p = [int(x) for x in ip.split(".")]
+    return p[0] == 10 or (p[0] == 192 and p[1] == 168) or (p[0] == 172 and 16 <= p[1] <= 31)
+
 def lan_ips():
-    ips = set()
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("10.255.255.255", 1)); ips.add(s.getsockname()[0]); s.close()
-    except OSError: pass
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            ips.add(info[4][0])
-    except OSError: pass
-    return sorted(i for i in ips if not i.startswith("127."))
+    """Addresses a phone on the same Wi-Fi can use. Wi-Fi/Ethernet first; VPN addresses left out."""
+    import subprocess
+    found = []
+    if sys.platform == "darwin":
+        for iface in ("en0", "en1", "en2", "en3", "en4", "en5"):
+            try:
+                out = subprocess.run(["ipconfig", "getifaddr", iface], capture_output=True, text=True, timeout=3).stdout.strip()
+                if out: found.append(out)
+            except Exception:
+                pass
+    elif sys.platform.startswith("linux"):
+        try:
+            out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=3).stdout.split()
+            found += [ip for ip in out if ":" not in ip]
+        except Exception:
+            pass
+    if not found:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("10.255.255.255", 1)); found.append(s.getsockname()[0]); s.close()
+        except OSError:
+            pass
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                found.append(info[4][0])
+        except OSError:
+            pass
+    seen, out = set(), []
+    for ip in found:
+        if ip in seen or ip.startswith("127.") or ip.startswith("169.254."):
+            continue
+        seen.add(ip); out.append(ip)
+    # Home-network addresses first
+    out.sort(key=lambda ip: (not _private(ip),))
+    return out
 
 # ───────────────────────────── HTTP server ─────────────────────────────
 
@@ -751,7 +782,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             path = fetch_file(cfg, item)
         except Exception as e:
-            return self.send_json({"error": f"Couldn't download from Moodle: {e}"}, 502)
+            return self.send_json({"error": f"ההורדה ממודל נכשלה: {e}"}, 502)
         name = item["data"].get("filename") or "file"
         ctype = item["data"].get("mimetype") or mimetypes.guess_type(name)[0] or "application/octet-stream"
         size = os.path.getsize(path)
@@ -777,10 +808,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/login":
             if not cfg.get("passcode_hash"):
-                return self.send_json({"error": "Finish setup on the computer first."}, 400)
+                return self.send_json({"error": "סיימו קודם את ההגדרה במחשב."}, 400)
             time.sleep(0.4)
             if hash_pass(str(data.get("passcode", "")), cfg["passcode_salt"]) != cfg["passcode_hash"]:
-                return self.send_json({"error": "Wrong passcode."}, 403)
+                return self.send_json({"error": "קוד גישה שגוי."}, 403)
             tok = secrets.token_urlsafe(32)
             q("INSERT INTO sessions(token,created,label) VALUES(?,?,?)",
               (tok, time.time(), self.headers.get("User-Agent", "")[:120]))
@@ -802,14 +833,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 try:
                     site = Moodle(url, tok).call("core_webservice_get_site_info")
                 except MoodleError as e:
-                    return self.send_json({"error": f"Moodle didn't accept that sign-in: {e}"}, 400)
+                    return self.send_json({"error": f"מודל לא קיבל את ההתחברות: {e}"}, 400)
                 cfg["token"], cfg["moodle_url"] = tok, url
                 meta_set("site", {"name": site.get("sitename"), "user": site.get("fullname")})
             if data.get("passcode"):
                 if len(str(data["passcode"])) < 4:
-                    return self.send_json({"error": "Use a passcode of at least 4 characters."}, 400)
+                    return self.send_json({"error": "קוד הגישה צריך להיות לפחות 4 תווים."}, 400)
                 if cfg.get("passcode_hash") and not local:
-                    return self.send_json({"error": "Change the passcode from the computer running the Hub."}, 403)
+                    return self.send_json({"error": "אפשר לשנות את קוד הגישה רק מהמחשב שמריץ את ה-Hub."}, 403)
                 cfg["passcode_salt"] = secrets.token_hex(8)
                 cfg["passcode_hash"] = hash_pass(str(data["passcode"]), cfg["passcode_salt"])
                 q("DELETE FROM sessions")
@@ -839,14 +870,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_json({"ok": True})
 
         if path == "/api/test-notify":
-            ok = notify(cfg, "Moodle Hub test", "Notifications work. You'll get new assignments, deadline changes, "
-                        "announcements and reminders here.", tags=["tada"])
-            return self.send_json({"ok": ok} if ok else {"error": "Couldn't reach the notification service."}, 200 if ok else 502)
+            ok = notify(cfg, "בדיקה מ-Moodle Hub", "ההתראות עובדות. כאן יגיעו מטלות חדשות, שינויים במועדי הגשה, הודעות ותזכורות.", tags=["tada"])
+            return self.send_json({"ok": ok} if ok else {"error": "שירות ההתראות לא זמין."}, 200 if ok else 502)
 
         if path == "/api/task":
             title = short(str(data.get("title", "")), 200)
             if not title:
-                return self.send_json({"error": "Give the task a name."}, 400)
+                return self.send_json({"error": "תנו למטלה שם."}, 400)
             due = data.get("due")
             due = int(due) if due else None
             tid = data.get("id") if str(data.get("id", "")).startswith("manual-") else "manual-" + secrets.token_hex(5)
@@ -871,17 +901,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/summarize/([\w.-]+)", path)
         if m:
             if not cfg.get("anthropic_api_key"):
-                return self.send_json({"error": "Add an Anthropic API key in Settings to get summaries."}, 400)
+                return self.send_json({"error": "כדי לקבל תקצירים, הוסיפו מפתח API של Anthropic בהגדרות."}, 400)
             r = q("SELECT * FROM items WHERE id=?", (m.group(1),), one=True)
             if not r: return self.send_json({"error": "not found"}, 404)
             item = {"id": r["id"], "course": r["course"], "data": json.loads(r["data"])}
             try:
                 s = summarize_item(cfg, item)
             except Exception as e:
-                return self.send_json({"error": f"Couldn't summarize: {e}"}, 502)
+                return self.send_json({"error": f"יצירת התקציר נכשלה: {e}"}, 502)
             if not s:
-                hint = "" if _has_pypdf() else " (install pypdf: pip install pypdf)"
-                return self.send_json({"error": "Couldn't read enough text from this file" + hint}, 422)
+                hint = "" if _has_pypdf() else " (צריך להתקין: pip install pypdf)"
+                return self.send_json({"error": "לא הצלחתי לקרוא מספיק טקסט מהקובץ" + hint}, 422)
             return self.send_json({"ok": True, "summary": s})
 
         if path == "/api/logout":
