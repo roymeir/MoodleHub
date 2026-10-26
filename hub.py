@@ -689,8 +689,21 @@ def _vpn(ip):
     p = [int(x) for x in ip.split(".")]
     return p[0] == 100 and 64 <= p[1] <= 127
 
+_lan_cache = {"at": 0.0, "ips": None}
+
 def lan_ips():
-    """Addresses a phone on the same Wi-Fi can use. Wi-Fi/Ethernet first; VPN addresses left out."""
+    """Addresses a phone on the same Wi-Fi can use. Looking them up can take seconds on a Mac, so answer from
+    the last lookup and refresh it in the background once it's a minute old."""
+    c = _lan_cache
+    if c["ips"] is None:
+        c["ips"], c["at"] = _find_lan_ips(), time.time()
+    elif time.time() - c["at"] > 60:
+        c["at"] = time.time()
+        threading.Thread(target=lambda: c.update(ips=_find_lan_ips()), daemon=True).start()
+    return c["ips"]
+
+def _find_lan_ips():
+    """Wi-Fi/Ethernet first; VPN addresses left out."""
     import subprocess
     found = []
     if sys.platform == "darwin":

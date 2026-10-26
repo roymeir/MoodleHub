@@ -88,6 +88,8 @@ details.sec summary .n{color:var(--muted);font-weight:400;font-size:13px;backgro
 .sheet{position:absolute;left:0;right:0;bottom:0;max-width:640px;margin:0 auto;background:var(--panel);border-radius:24px 24px 0 0;padding:24px 20px calc(24px + env(safe-area-inset-bottom));max-height:88vh;overflow:auto;animation:up .2s ease}
 @keyframes up{from{transform:translateY(30px);opacity:.5}}
 .sheet h3{font-weight:600;font-size:21px;margin:0 0 6px;line-height:1.35}
+.loading{color:var(--muted);font-size:15px;padding:18px 0;display:flex;align-items:center;gap:10px}
+.loading::before{content:"";width:18px;height:18px;border-radius:50%;border:2px solid var(--accent-soft);border-top-color:var(--accent);animation:spin .8s linear infinite}
 .sheet .sub{color:var(--muted);font-size:14px;margin-bottom:16px;line-height:1.5}
 .sheet .txt{font-size:15px;line-height:1.7;white-space:pre-line}
 .sum{background:var(--accent-soft);border-radius:14px;padding:12px 14px;font-size:15px;line-height:1.6;margin:12px 0}

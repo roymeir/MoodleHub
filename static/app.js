@@ -453,7 +453,10 @@ function notifyStep(st) {
 }
 
 async function settingsSheet() {
-  const st = await api("/api/settings");
+  openSheet(h("h3", { text: T("הגדרות", "Settings") }), h("div", { class: "loading", text: T("טוען…", "Loading…") }));
+  let st;
+  try { st = await api("/api/settings"); } catch (e) { closeSheet(); return toast(e.message); }
+  if ($("#sheet-wrap").hidden) return;   // closed while loading
   const err = h("div", { class: "err" });
   const f = (label, el, hint) => h("div", { class: "field" }, h("label", { text: label }), el, hint ? h("div", { class: "hint", style: "margin-top:6px", text: hint }) : null);
   const tok = h("textarea", { placeholder: "moodlemobile://token=…", dir: "ltr", style: "min-height:60px" });
