@@ -197,19 +197,32 @@ def html_to_text(s):
     s = re.sub(r"\n\s*\n+", "\n\n", s)
     return s.strip()
 
-# Moodle names often carry both languages ("Complexity Theoryתורת הסיבוכיות"); notifications are in Hebrew,
-# so keep only the Hebrew half. Text with no Hebrew (e.g. "Exercise 1") is left as it is.
-_EN_RUN = re.compile(r"(?<![.\w])[A-Za-z][A-Za-z'’&.+#-]*(?:\s+(?:[A-Za-z][A-Za-z'’&.+#-]*|\d+[A-Za-z]*\b(?![\u0590-\u05FF])))*")
+# Moodle names written in two languages arrive glued together with no space between the halves
+# ("Complexity Theoryתורת הסיבוכיות"). Notifications are in Hebrew, so keep only the Hebrew half.
+# Anything else, including a Hebrew sentence that mentions an English word, is left as it is.
+_HE, _LAT = re.compile(r"[\u0590-\u05FF]"), re.compile(r"[A-Za-z]")
+def _is_he(s):
+    return len(_HE.findall(s)) > len(_LAT.findall(s))
+
 def heb(s):
     s = s or ""
-    if not re.search(r"[\u0590-\u05FF]", s) or not re.search(r"(?<![.\w])[A-Za-z]{2,}", s):
+    seams = []
+    for i in range(1, len(s)):
+        a, b = s[i - 1], s[i]
+        if _HE.match(b) and (_LAT.match(a) or (a in "?!.)" and i > 1 and _LAT.match(s[i - 2]))):
+            seams.append(i)
+        elif _HE.match(a) and _LAT.match(b):
+            word = re.search(r"[\u0590-\u05FF]+$", s[:i]).group()
+            # a Hebrew prefix letter on an English word ("מProblemChat") is not a seam
+            if len(word) >= 2 and not (re.fullmatch(r"[משהוכלב]{1,3}", word) and (i - len(word) == 0 or s[i - len(word) - 1] in " -")):
+                seams.append(i)
+    if len(seams) != 1:
         return s
-    out = _EN_RUN.sub(" ", s)
-    out = re.sub(r"\(\s*\)|\[\s*\]", " ", out)
-    out = re.sub(r"\s*([-–—|/·,:])(?:\s*[-–—|/·,:])+\s*", r" \1 ", out)
-    out = re.sub(r"\s*[-–—|/·,:]\s*(?=\()", " ", out)
-    out = re.sub(r"^[\s\-–—|/\\:·,.?!_()\[\]]+|[\s\-–—|/\\:·,.?!_(\[]+$", "", out)
-    return re.sub(r"\s{2,}", " ", out).strip() or s
+    edge = r"^[\s\-–—|/\\:·,.?!_]+|[\s\-–—|/\\:·,_]+$"
+    halves = [re.sub(edge, "", x).strip() for x in (s[:seams[0]], s[seams[0]:])]
+    if not all(halves) or _is_he(halves[0]) == _is_he(halves[1]):
+        return s
+    return halves[0] if _is_he(halves[0]) else halves[1]
 
 def short(s, n):
     s = re.sub(r"\s+", " ", s or "").strip()

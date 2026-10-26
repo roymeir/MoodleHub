@@ -34,26 +34,23 @@ function h(tag, attrs, ...kids) {
   for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : String(kid));
   return el;
 }
-// Moodle names often carry both languages ("Complexity Theoryתורת הסיבוכיות"): show only the half
-// in the current language. Text written in just one language (e.g. "Exercise 1", "שיעור 1") is left as it is.
-const HEB = /[\u0590-\u05FF]/, LAT = /(?<![.\w])[A-Za-z]{2,}/;   // an English word, not a file extension
-const RUN = {
-  // an English run, with any numbers or codes that follow it ("Calculus 1M"); not a file extension (".pdf")
-  en: /(?<![.\w])[A-Za-z][A-Za-z'’&.+#-]*(?:\s+(?:[A-Za-z][A-Za-z'’&.+#-]*|\d+[A-Za-z]*\b(?![\u0590-\u05FF])))*/g,
-  // a Hebrew run, with any numbers that follow it ("חדו״א 1")
-  he: /[\u0590-\u05FF][\u0590-\u05FF"'׳״-]*(?:\s+(?:[\u0590-\u05FF][\u0590-\u05FF"'׳״-]*|\d+\b(?![A-Za-z])))*/g,
-};
-const EDGE = /^[\s\-–—|/\\:·,.?!_()[\]]+|[\s\-–—|/\\:·,.?!_([]+$/g;
+// Moodle names written in two languages arrive glued together with no space between the halves
+// ("Complexity Theoryתורת הסיבוכיות"): show only the half in the current language. Anything else,
+// including a Hebrew sentence that mentions an English word ("גרסה חדשה של problemchat"), is shown in full.
+const HEB = /[\u0590-\u05FF]/g, LAT = /[A-Za-z]/g;
+const count = (s, re) => (s.match(re) || []).length;
+const isHe = (s) => count(s, HEB) > count(s, LAT);
+const EDGE = /^[\s\-–—|/\\:·,.?!_]+|[\s\-–—|/\\:·,_]+$/g;
+// where one language ends and the other starts with no space: "...Theoryתורת" or "...הסיבוכיותComplexity".
+// Hebrew directly before English is usually a prefix letter ("מProblemChat", "לZoom"), so that only counts after a whole word.
+const SEAM = /(?<=[A-Za-z][?!.)]?)(?=[\u0590-\u05FF])|(?<=[\u0590-\u05FF]{2,})(?<![\s\-][משהוכלב]{1,3})(?=[A-Za-z])/g;
 function name(s) {
   s = String(s ?? "");
-  if (!HEB.test(s) || !LAT.test(s)) return s;
-  return s.replace(LANG === "en" ? RUN.he : RUN.en, " ")
-    .replace(/\(\s*\)|\[\s*\]/g, " ")
-    .replace(/\s*([-–—|/·,:])(?:\s*[-–—|/·,:])+\s*/g, " $1 ")
-    .replace(/\s*[-–—|/·,:]\s*(?=\()/g, " ")
-    .replace(EDGE, "")
-    .replace(/\s{2,}/g, " ")
-    .trim() || s;
+  const seams = [...s.matchAll(SEAM)].map((m) => m.index);
+  if (seams.length !== 1) return s;
+  const halves = [s.slice(0, seams[0]), s.slice(seams[0])].map((x) => x.replace(EDGE, "").trim());
+  if (!halves[0] || !halves[1] || isHe(halves[0]) === isHe(halves[1])) return s;
+  return halves.find((x) => isHe(x) === (LANG === "he"));
 }
 // Isolate a piece of text (a course name, a title) so its direction never scrambles the line around it
 const B = (s) => h("bdi", { text: name(s) });
