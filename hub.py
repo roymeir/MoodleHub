@@ -483,23 +483,40 @@ def collect(m):
     except MoodleError as e:
         log("timeline failed:", e)
 
-    # The whole Moodle calendar: exam dates, course and site events, quiz windows, your own events
+    # The whole Moodle calendar: exam dates, course, category and site events, quiz windows, your own events.
+    # Two sources, since sites differ in what each returns: the event list, and the month views the web calendar uses.
+    cal_events = {}
     try:
         cal = m.call("core_calendar_get_calendar_events", events={"courseids": list(cmap)},
                      options={"userevents": 1, "siteevents": 1, "timestart": int(now - 45 * 86400),
                               "timeend": int(now + 200 * 86400), "ignorehidden": 1})
         for e in cal.get("events", []):
-            # deadlines are already tasks (from assignments or the timeline above)
-            if f"event-{e['id']}" in items or (e.get("modulename") == "assign" and e.get("eventtype") == "due"):
-                continue
-            cid = e.get("courseid") if e.get("courseid") in cmap else None
-            add(f"cal-{e['id']}", "calevent", cid, {"title": html.unescape(e.get("name", "")),
-                "start": e.get("timestart"), "duration": e.get("timeduration") or 0,
-                "type": e.get("eventtype"), "module": e.get("modulename") or None, "location": e.get("location") or "",
-                "description": short(html_to_text(e.get("description", "")), 800),
-                "link": e.get("url") or (f"{m.base}/calendar/view.php?view=day&time={e.get('timestart')}")})
+            cal_events[e["id"]] = e
     except MoodleError as e:
-        log("calendar failed:", e)
+        log("calendar list failed:", e)
+    t = datetime.now()
+    for i in range(-1, 7):   # last month through six months ahead
+        y, mo = divmod(t.year * 12 + t.month - 1 + i, 12)
+        try:
+            view = m.call("core_calendar_get_calendar_monthly_view", year=y, month=mo + 1)
+            for wk in view.get("weeks", []):
+                for day in wk.get("days", []):
+                    for e in day.get("events", []):
+                        cal_events.setdefault(e["id"], e)
+        except MoodleError as e:
+            log(f"calendar month {y}-{mo + 1} failed:", e); break
+    log(f"calendar: {len(cal_events)} events from Moodle")
+    for e in cal_events.values():
+        # deadlines are already tasks (from assignments or the timeline above)
+        if f"event-{e['id']}" in items or (e.get("modulename") == "assign" and e.get("eventtype") == "due"):
+            continue
+        ecid = e.get("courseid") or (e.get("course") or {}).get("id")
+        cid = ecid if ecid in cmap else None
+        add(f"cal-{e['id']}", "calevent", cid, {"title": html.unescape(e.get("name", "")),
+            "start": e.get("timestart"), "duration": e.get("timeduration") or 0,
+            "type": e.get("eventtype"), "module": e.get("modulename") or None, "location": e.get("location") or "",
+            "description": short(html_to_text(e.get("description", "")), 800),
+            "link": e.get("url") or e.get("viewurl") or f"{m.base}/calendar/view.php?view=day&time={e.get('timestart')}"})
 
     # Announcements (news forums) and other forum discussions
     try:
