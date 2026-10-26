@@ -32,7 +32,7 @@ A window opens and shows the addresses. Leave it open.
 
 Open **http://localhost:8765** in Chrome or Edge on that computer, and follow the setup page:
 
-1. **Connect Moodle.** Click "Sign in to Moodle" and sign in with your university account. The page ends up blank, which is expected. Press F12, reload the page, copy the `moodlemobile://token=…` line from the console, and paste it into the setup page.
+1. **Connect Moodle.** Sign in to Moodle in Chrome or Edge, then click "Copy sign-in link". Open a new empty tab, press F12 (Mac: ⌥⌘J) to open the console, then paste the link into the address bar and press Enter. The console shows a red line containing `moodlemobile://token=…`. Copy that part and paste it into the setup page. If there's no red line, open the Network tab, click `launch.php`, and copy the `location` response header instead.
 2. **Choose a passcode** for your phone.
 3. **Notifications:** install the free **ntfy** app on your phone and subscribe to the topic the setup page shows you. Tap "Send a test notification" to check it works.
 4. **Your phone:** with your phone on the same Wi-Fi, open the address shown (like `http://192.168.1.20:8765`). Enter your passcode, then use **Share → Add to Home Screen** so it opens like an app.
