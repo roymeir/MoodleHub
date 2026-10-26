@@ -312,6 +312,28 @@ function renderCourses() {
 const KIND_LABEL = { quiz: T("בוחן", "Quiz"), assign: T("מטלה", "Assignment"), url: T("קישור", "Link"), page: T("דף", "Page"), forum: T("פורום", "Forum"), lti: T("וידאו", "Video"), hvp: T("וידאו", "Video"), folder: T("תיקייה", "Folder") };
 const extOf = (m) => (m.kind === "file" ? (m.filename || "").split(".").pop().slice(0, 4).toUpperCase() : KIND_LABEL[m.module] || "•");
 
+const matRow = (m) => h("div", { class: "mat", onclick: () => matSheet(m) },
+  h("div", { class: "ic", text: extOf(m) }),
+  h("div", { class: "t" }, h("div", {}, B(m.title)),
+    m.folder ? h("div", { class: "s" }, B(m.folder)) : null),
+  isNew(m) ? h("span", { class: "chip new", text: T("חדש", "New") }) : null);
+
+// Moodle has no syllabus field: look for files and links named like one, plus the course description
+const SYLLABUS = /syllab|סילבוס|סילאבוס|ת(?:ו)?כנית ה?קורס|מידע על הקורס|דרישות ה?קורס|course (?:outline|plan|info|description|requirements)/i;
+function syllabusSection(c) {
+  const files = c.materials.filter((m) => SYLLABUS.test(`${m.title} ${m.filename || ""} ${m.folder || ""}`));
+  const out = [h("div", { class: "label", text: T("סילבוס", "Syllabus") })];
+  if (files.length) out.push(h("div", { class: "sec" }, ...files.map(matRow)));
+  if (c.about) {
+    const x = h("div", { class: "x clip", dir: "auto", text: c.about });
+    out.push(h("div", { class: "card news", onclick: () => x.classList.toggle("clip"), style: "cursor:pointer" },
+      h("div", { class: "c", text: T("תיאור הקורס במודל", "Course description in Moodle") }), x));
+  }
+  if (!files.length && !c.about)
+    out.push(h("div", { class: "empty", text: T("לא נמצא סילבוס בקורס הזה במודל.", "No syllabus found for this course in Moodle.") }));
+  return out;
+}
+
 function renderCourse(c) {
   const secs = new Map();
   c.materials.forEach((m) => { if (!secs.has(m.section)) secs.set(m.section, []); secs.get(m.section).push(m); });
@@ -326,6 +348,7 @@ function renderCourse(c) {
   ];
   const tasks = S.tasks.filter((t) => t.course_id === c.id && !t.done && !t.submitted);
   if (tasks.length) out.push(h("div", { class: "label", text: T("להגשה", "Due") }), ...tasks.map(taskRow));
+  out.push(...syllabusSection(c));
   if (summarized.length) {
     out.push(h("div", { class: "label", text: T("בקצרה", "In short") }));
     summarized.slice(0, 6).forEach((m) => out.push(h("div", { class: "card", onclick: () => matSheet(m), style: "cursor:pointer" },
@@ -337,11 +360,7 @@ function renderCourse(c) {
     const nNew = items.filter(isNew).length;
     out.push(h("details", { class: "sec", open: newest && name === newest[0] },
       h("summary", {}, B(name), h("span", { class: "n", text: nNew ? T(`${nNew} חדשים`, `${nNew} new`) : `${items.length}` })),
-      ...items.map((m) => h("div", { class: "mat", onclick: () => matSheet(m) },
-        h("div", { class: "ic", text: extOf(m) }),
-        h("div", { class: "t" }, h("div", {}, B(m.title)),
-          m.folder ? h("div", { class: "s" }, B(m.folder)) : null),
-        isNew(m) ? h("span", { class: "chip new", text: T("חדש", "New") }) : null))));
+      ...items.map(matRow)));
   }
   view.replaceChildren(...out);
 }

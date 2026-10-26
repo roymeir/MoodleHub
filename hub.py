@@ -351,7 +351,8 @@ def collect(m):
 
     for c in courses:
         add(f"course-{c['id']}", "course", c["id"], {"title": cmap[c["id"]], "shortname": c.get("shortname"),
-            "url": f"{m.base}/course/view.php?id={c['id']}", "progress": c.get("progress")})
+            "url": f"{m.base}/course/view.php?id={c['id']}", "progress": c.get("progress"),
+            "about": short(html_to_text(c.get("summary") or ""), 3000)})
 
     # Course contents: sections, files, links, activities
     for cid in cmap:
@@ -651,7 +652,7 @@ def state():
         k = r["kind"]
         if k == "course":
             out["courses"].setdefault(str(r["course_id"]), {"materials": []}).update(
-                {"id": r["course_id"], "title": d["title"], "url": d["url"]})
+                {"id": r["course_id"], "title": d["title"], "url": d["url"], "about": d.get("about", "")})
         elif k == "task":
             base.pop("fileurl", None)
             base["done"] = r["id"] in done
