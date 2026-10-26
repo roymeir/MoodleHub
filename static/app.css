@@ -21,6 +21,7 @@ bdi{unicode-bidi:isolate}
 .sync.err{color:var(--bad)}
 .top-actions{display:flex;gap:6px}
 .icon-btn{background:var(--panel);border:0;width:40px;height:40px;border-radius:12px;display:grid;place-items:center;color:var(--accent);cursor:pointer;box-shadow:0 1px 2px rgba(28,43,65,.06)}
+.lang-btn{font-size:14px;font-weight:600;letter-spacing:.02em}
 .icon-btn.spin svg{animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(-360deg)}}
 

@@ -197,6 +197,33 @@ def html_to_text(s):
     s = re.sub(r"\n\s*\n+", "\n\n", s)
     return s.strip()
 
+# Moodle names written in two languages arrive glued together with no space between the halves
+# ("Complexity Theoryתורת הסיבוכיות"). Notifications are in Hebrew, so keep only the Hebrew half.
+# Anything else, including a Hebrew sentence that mentions an English word, is left as it is.
+_HE, _LAT = re.compile(r"[\u0590-\u05FF]"), re.compile(r"[A-Za-z]")
+def _is_he(s):
+    return len(_HE.findall(s)) > len(_LAT.findall(s))
+
+def heb(s):
+    s = s or ""
+    seams = []
+    for i in range(1, len(s)):
+        a, b = s[i - 1], s[i]
+        if _HE.match(b) and (_LAT.match(a) or (a in "?!.)" and i > 1 and _LAT.match(s[i - 2]))):
+            seams.append(i)
+        elif _HE.match(a) and _LAT.match(b):
+            word = re.search(r"[\u0590-\u05FF]+$", s[:i]).group()
+            # a Hebrew prefix letter on an English word ("מProblemChat") is not a seam
+            if len(word) >= 2 and not (re.fullmatch(r"[משהוכלב]{1,3}", word) and (i - len(word) == 0 or s[i - len(word) - 1] in " -")):
+                seams.append(i)
+    if len(seams) != 1:
+        return s
+    edge = r"^[\s\-–—|/\\:·,.?!_]+|[\s\-–—|/\\:·,_]+$"
+    halves = [re.sub(edge, "", x).strip() for x in (s[:seams[0]], s[seams[0]:])]
+    if not all(halves) or _is_he(halves[0]) == _is_he(halves[1]):
+        return s
+    return halves[0] if _is_he(halves[0]) else halves[1]
+
 def short(s, n):
     s = re.sub(r"\s+", " ", s or "").strip()
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
@@ -543,19 +570,19 @@ def send_change_notifications(cfg, changes):
     lines = []
     urgent = False
     for kind, it, prev in changes:
-        d, c = it["data"], short(it["course"], 28)
+        d, c = it["data"], short(heb(it["course"]), 28)
         if kind == "new" and it["kind"] == "task":
-            lines.append(f"📝 מטלה חדשה ב{c}: {d['title']} — להגשה {fmt_due(d.get('due'))}")
+            lines.append(f"📝 מטלה חדשה ב{c}: {heb(d['title'])} — להגשה {fmt_due(d.get('due'))}")
             urgent = True
         elif kind == "due":
-            lines.append(f"📅 מועד ההגשה השתנה ({c}): {d['title']} — עכשיו {fmt_due(d.get('due'))}")
+            lines.append(f"📅 מועד ההגשה השתנה ({c}): {heb(d['title'])} — עכשיו {fmt_due(d.get('due'))}")
             urgent = True
         elif kind == "new" and it["kind"] == "news":
-            lines.append(f"📣 {c}: {d['title']} — {short(d.get('text'), 110)}")
+            lines.append(f"📣 {c}: {heb(d['title'])} — {short(d.get('text'), 110)}")
         elif kind == "new" and it["kind"] in ("file", "material"):
-            lines.append(f"📄 חדש ב{c}: {d['title']}")
+            lines.append(f"📄 חדש ב{c}: {heb(d['title'])}")
         elif kind in ("grade",) or (kind == "new" and it["kind"] == "grade"):
-            lines.append(f"🎓 פורסם ציון ({c}): {d['title']} — {d.get('grade')}")
+            lines.append(f"🎓 פורסם ציון ({c}): {heb(d['title'])} — {d.get('grade')}")
             urgent = True
     if not lines:
         return
@@ -590,8 +617,8 @@ def send_reminders(cfg):
             q("INSERT OR IGNORE INTO reminders(task_id,win) VALUES(?,?)", (r["id"], "24h"))
         hrs = int(left // 3600)
         when = f"בעוד {hrs} שעות" if hrs >= 1 else f"בעוד {int(left//60)} דקות"
-        notify(cfg, f"להגשה {when}: {d['title']}",
-               f"{r['course']} · {fmt_due(due)}" + ("" if d.get("source") != "Moodle" else " · עדיין לא הוגש"),
+        notify(cfg, f"להגשה {when}: {heb(d['title'])}",
+               f"{heb(r['course'])} · {fmt_due(due)}" + ("" if d.get("source") != "Moodle" else " · עדיין לא הוגש"),
                url=d.get("link"), priority=5 if win == "3h" else 4, tags=["alarm_clock"])
 
 def sync_loop():
@@ -657,17 +684,24 @@ def _private(ip):
     p = [int(x) for x in ip.split(".")]
     return p[0] == 10 or (p[0] == 192 and p[1] == 168) or (p[0] == 172 and 16 <= p[1] <= 31)
 
+def _vpn(ip):
+    # 100.64.0.0/10 is used by VPNs and tunnels (Tailscale, Zscaler, carrier networks), never by a home Wi-Fi router
+    p = [int(x) for x in ip.split(".")]
+    return p[0] == 100 and 64 <= p[1] <= 127
+
 def lan_ips():
     """Addresses a phone on the same Wi-Fi can use. Wi-Fi/Ethernet first; VPN addresses left out."""
     import subprocess
     found = []
     if sys.platform == "darwin":
-        for iface in ("en0", "en1", "en2", "en3", "en4", "en5"):
-            try:
-                out = subprocess.run(["ipconfig", "getifaddr", iface], capture_output=True, text=True, timeout=3).stdout.strip()
-                if out: found.append(out)
-            except Exception:
-                pass
+        # Every Wi-Fi/Ethernet adapter (en0, en1, ... a dock or USB adapter can be en7 or higher); VPN adapters are utun*
+        try:
+            out = subprocess.run(["/sbin/ifconfig"], capture_output=True, text=True, timeout=3).stdout
+            for block in re.split(r"\n(?=\S)", out):
+                if re.match(r"en\d+:", block) and "status: active" in block:
+                    found += re.findall(r"\binet (\d+\.\d+\.\d+\.\d+)", block)
+        except Exception:
+            pass
     elif sys.platform.startswith("linux"):
         try:
             out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=3).stdout.split()
@@ -687,7 +721,7 @@ def lan_ips():
             pass
     seen, out = set(), []
     for ip in found:
-        if ip in seen or ip.startswith("127.") or ip.startswith("169.254."):
+        if ip in seen or ip.startswith("127.") or ip.startswith("169.254.") or _vpn(ip):
             continue
         seen.add(ip); out.append(ip)
     # Home-network addresses first
@@ -824,6 +858,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/setup":
             local = is_local(self.client_address[0])
+            if not cfg.get("passcode_hash") and not data.get("passcode"):
+                # without a passcode only this computer can get in, so the phone would be locked out
+                return self.send_json({"error": "בחרו קוד גישה (לפחות 4 תווים), כדי שהטלפון יוכל להתחבר."}, 400)
             if "token" in data and data["token"]:
                 try:
                     tok = parse_token(data["token"])

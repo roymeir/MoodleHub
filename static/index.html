@@ -25,6 +25,7 @@
       <div class="sync" id="sync"></div>
     </div>
     <div class="top-actions">
+      <button class="icon-btn lang-btn" id="btn-lang"></button>
       <button class="icon-btn" id="btn-sync" aria-label="סנכרון עכשיו" title="סנכרון עכשיו">
         <svg viewBox="0 0 24 24" width="20" height="20"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -37,13 +38,13 @@
   <main id="view"></main>
   <nav class="tabbar" id="tabbar">
     <button data-tab="today" class="on">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>היום</button>
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span>היום</span></button>
     <button data-tab="courses">
-      <svg viewBox="0 0 24 24"><path d="M5 5.5A1.5 1.5 0 0 1 6.5 4H19v14H6.5A1.5 1.5 0 0 0 5 19.5z"/><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3"/></svg>קורסים</button>
+      <svg viewBox="0 0 24 24"><path d="M5 5.5A1.5 1.5 0 0 1 6.5 4H19v14H6.5A1.5 1.5 0 0 0 5 19.5z"/><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3"/></svg><span>קורסים</span></button>
     <button data-tab="updates">
-      <svg viewBox="0 0 24 24"><path d="M4 6h16v10H8l-4 4z"/></svg>הודעות<i class="dot" id="dot-updates" hidden></i></button>
+      <svg viewBox="0 0 24 24"><path d="M4 6h16v10H8l-4 4z"/></svg><span>הודעות</span><i class="dot" id="dot-updates" hidden></i></button>
     <button data-tab="grades">
-      <svg viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></svg>ציונים</button>
+      <svg viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></svg><span>ציונים</span></button>
   </nav>
 </div>
 <div id="sheet-wrap" class="sheet-wrap" hidden>
