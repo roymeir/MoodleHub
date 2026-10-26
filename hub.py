@@ -903,6 +903,13 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+def hub_already_running(port):
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=3) as r:
+            return r.headers.get("Server", "").startswith("MoodleHub") or "configured" in json.loads(r.read())
+    except Exception:
+        return False
+
 def main():
     for stream in (sys.stdout, sys.stderr):
         try: stream.reconfigure(errors="replace")
@@ -910,7 +917,25 @@ def main():
     cfg = load_config()
     con()
     port = int(os.environ.get("HUB_PORT") or cfg.get("port") or 8765)
-    srv = Server(("0.0.0.0", port), Handler)
+    srv = None
+    for candidate in range(port, port + 20):
+        try:
+            srv = Server(("0.0.0.0", candidate), Handler)
+            break
+        except OSError:
+            if hub_already_running(candidate):
+                print(f"\n  Moodle Hub is already running at http://localhost:{candidate}")
+                print("  Nothing to do: you can close this window.\n")
+                return
+            print(f"  Port {candidate} is used by another app, trying {candidate + 1}…")
+    if srv is None:
+        print(f"\n  Couldn't find a free port between {port} and {port + 19}. "
+              "Set a different \"port\" in data/config.json and try again.\n")
+        sys.exit(1)
+    if candidate != cfg.get("port"):
+        cfg["port"] = candidate   # keep the same address from now on
+        save_config(cfg)
+    port = candidate
     threading.Thread(target=sync_loop, daemon=True).start()
     print()
     print("  Moodle Hub is running.")
