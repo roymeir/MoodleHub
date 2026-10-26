@@ -684,17 +684,24 @@ def _private(ip):
     p = [int(x) for x in ip.split(".")]
     return p[0] == 10 or (p[0] == 192 and p[1] == 168) or (p[0] == 172 and 16 <= p[1] <= 31)
 
+def _vpn(ip):
+    # 100.64.0.0/10 is used by VPNs and tunnels (Tailscale, Zscaler, carrier networks), never by a home Wi-Fi router
+    p = [int(x) for x in ip.split(".")]
+    return p[0] == 100 and 64 <= p[1] <= 127
+
 def lan_ips():
     """Addresses a phone on the same Wi-Fi can use. Wi-Fi/Ethernet first; VPN addresses left out."""
     import subprocess
     found = []
     if sys.platform == "darwin":
-        for iface in ("en0", "en1", "en2", "en3", "en4", "en5"):
-            try:
-                out = subprocess.run(["ipconfig", "getifaddr", iface], capture_output=True, text=True, timeout=3).stdout.strip()
-                if out: found.append(out)
-            except Exception:
-                pass
+        # Every Wi-Fi/Ethernet adapter (en0, en1, ... a dock or USB adapter can be en7 or higher); VPN adapters are utun*
+        try:
+            out = subprocess.run(["/sbin/ifconfig"], capture_output=True, text=True, timeout=3).stdout
+            for block in re.split(r"\n(?=\S)", out):
+                if re.match(r"en\d+:", block) and "status: active" in block:
+                    found += re.findall(r"\binet (\d+\.\d+\.\d+\.\d+)", block)
+        except Exception:
+            pass
     elif sys.platform.startswith("linux"):
         try:
             out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=3).stdout.split()
@@ -714,7 +721,7 @@ def lan_ips():
             pass
     seen, out = set(), []
     for ip in found:
-        if ip in seen or ip.startswith("127.") or ip.startswith("169.254."):
+        if ip in seen or ip.startswith("127.") or ip.startswith("169.254.") or _vpn(ip):
             continue
         seen.add(ip); out.append(ip)
     # Home-network addresses first
@@ -851,6 +858,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/setup":
             local = is_local(self.client_address[0])
+            if not cfg.get("passcode_hash") and not data.get("passcode"):
+                # without a passcode only this computer can get in, so the phone would be locked out
+                return self.send_json({"error": "בחרו קוד גישה (לפחות 4 תווים), כדי שהטלפון יוכל להתחבר."}, 400)
             if "token" in data and data["token"]:
                 try:
                     tok = parse_token(data["token"])

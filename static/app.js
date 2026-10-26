@@ -101,7 +101,7 @@ async function boot() {
   try { st = await (await fetch("/api/status", { credentials: "same-origin" })).json(); }
   catch { return renderMessage(T("אין חיבור ל-Hub", "Can't reach the Hub"), T("ודאו שהמחשב שמריץ את Moodle Hub דולק ומחובר.", "Make sure the computer running Moodle Hub is on and connected.")); }
   if (!st.authed) return st.has_passcode ? renderLogin() :
-    renderMessage(T("כמעט שם", "Almost there"), T("סיימו את ההגדרה במחשב שמריץ את Moodle Hub, ואז חזרו לכאן.", "Finish the setup on the computer running Moodle Hub, then come back here."));
+    renderMessage(T("כמעט שם", "Almost there"), T("עוד לא נבחר קוד גישה. במחשב שמריץ את Moodle Hub, פתחו את ההגדרות ובחרו קוד, ואז חזרו לכאן.", "No passcode has been set yet. On the computer running Moodle Hub, open Settings and choose one, then come back here."));
   if (!st.configured) return renderSetup();
   chrome(true);
   await refresh();
@@ -462,9 +462,12 @@ async function settingsSheet() {
   const mins = h("select", {}, ...[10, 15, 30, 60].map((m) => h("option", { value: m, text: T(`כל ${m} דקות`, `Every ${m} minutes`), selected: m === st.sync_minutes })));
   const qs = h("input", { type: "number", min: 0, max: 23, value: st.quiet_hours[0], style: "width:45%" });
   const qe = h("input", { type: "number", min: 0, max: 23, value: st.quiet_hours[1], style: "width:45%" });
+  const pass = h("input", { type: "password", autocomplete: "new-password", placeholder: T("לפחות 4 תווים", "At least 4 characters") });
   const key = h("input", { type: "password", dir: "ltr", placeholder: st.has_api_key ? T("שמור, הקלידו כדי להחליף", "Saved, type to replace") : "sk-ant-…" });
   openSheet(h("h3", { text: T("הגדרות", "Settings") }),
     h("div", { class: "sub", text: st.has_token ? T("מחובר למודל", "Connected to Moodle") : T("לא מחובר", "Not connected") }),
+    st.local ? f(T("קוד גישה לטלפון", "Phone passcode"), pass,
+      T("השאירו ריק כדי להשאיר את הקוד הנוכחי. שינוי הקוד מנתק את כל המכשירים.", "Leave empty to keep the current one. Changing it signs out every device.")) : null,
     f(T("נושא ההתראות (באפליקציית ntfy)", "Notification topic (in the ntfy app)"), topic, T("הירשמו לנושא הזה באפליקציית ntfy בטלפון.", "Subscribe to this topic in the ntfy app on your phone.")),
     h("div", { class: "btns", style: "margin-top:0" }, h("button", { class: "btn soft", text: T("שליחת התראת בדיקה", "Send a test notification"),
       onclick: async () => { try { await api("/api/test-notify", { method: "POST" }); toast(T("נשלח", "Sent")); } catch (e) { toast(e.message); } } })),
@@ -482,7 +485,8 @@ async function settingsSheet() {
       h("button", { class: "btn", text: T("שמירה", "Save"), onclick: async () => {
         try {
           await api("/api/setup", { method: "POST", body: { token: tok.value || undefined, ntfy_topic: topic.value, public_url: pub.value,
-            sync_minutes: +mins.value, quiet_hours: [+qs.value, +qe.value], anthropic_api_key: key.value ? key.value : undefined } });
+            sync_minutes: +mins.value, quiet_hours: [+qs.value, +qe.value], anthropic_api_key: key.value ? key.value : undefined,
+            passcode: pass.value || undefined } });
           closeSheet(); toast(T("נשמר", "Saved")); refresh(true);
         } catch (e) { err.textContent = e.message; }
       } }),
