@@ -5,6 +5,7 @@ The interface is in Hebrew, right-to-left.
 Your own replacement for the Moodle website. It runs on one computer, checks Moodle every 15 minutes, and gives you:
 
 - **Today:** what's due, with countdowns and a Submit button
+- **Exams and classes:** exam dates (Moed A/B), your weekly classes and recitations, and the syllabus link, read from each course page. Reminders a week and a day before each exam.
 - **Courses:** every file and activity, organized by section. Files open on your phone.
 - **Updates:** course announcements
 - **Grades:** grades as they're posted

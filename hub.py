@@ -28,6 +28,7 @@ VERSION = "1.0"
 DEFAULT_CONFIG = {
     "moodle_url": "https://moodle.runi.ac.il/2027",
     "token": "",
+    "private_token": "",          # lets the Hub open course pages (exams, schedule, syllabus)
     "passcode_hash": "",
     "passcode_salt": "",
     "ntfy_server": "https://ntfy.sh",
@@ -38,6 +39,7 @@ DEFAULT_CONFIG = {
     "quiet_hours": [0, 7],          # no non-urgent pushes between 00:00 and 07:00
     "public_url": "",               # how your phone reaches the Hub (shown in notifications)
     "port": 8765,
+    "semester_end": "",             # YYYY-MM-DD; empty = a week before the first exam
 }
 
 def log(*a):
@@ -84,10 +86,10 @@ def parse_token(text):
             raise ValueError("לא נמצא טוקן תקין בקישור. העתיקו את כל הערך שמתחיל ב-moodlemobile://token=")
         parts = decoded.split(":::")
         if len(parts) >= 2 and re.fullmatch(r"[a-f0-9]{32}", parts[1]):
-            return parts[1]
+            return parts[1], (parts[2] if len(parts) > 2 else "")
         raise ValueError("לא נמצא טוקן תקין בקישור.")
     if re.fullmatch(r"[a-f0-9]{32}", text):
-        return text
+        return text, ""
     raise ValueError("הדביקו את הערך שמתחיל ב-moodlemobile://token=")
 
 # ───────────────────────────── database ─────────────────────────────
@@ -363,6 +365,162 @@ def summarize_item(cfg, item):
 sync_state = {"running": False, "last": None, "error": None, "next": None}
 _sync_lock = threading.Lock()
 
+# ───────────────────────── course pages (exams, schedule, syllabus) ─────────────────────────
+# RUNI shows exam dates, the weekly schedule and syllabus links in the course page header,
+# which Moodle's app interface doesn't expose. The Hub signs in to the website the same way
+# the official Moodle app does (a one-time auto-login key) and reads those pages.
+
+import http.cookiejar
+from html.parser import HTMLParser
+
+_web_cache = {}
+
+class MoodleWeb:
+    MIN_GAP = 6 * 60 + 10   # Moodle allows one auto-login key every 6 minutes
+
+    def __init__(self, base, token, private_token):
+        self.base = base.rstrip("/")
+        self.m = Moodle(base, token)
+        self.private_token = private_token
+        self.jar = http.cookiejar.MozillaCookieJar(os.path.join(DATA, "web-session.txt"))
+        try: self.jar.load(ignore_discard=True, ignore_expires=True)
+        except Exception: pass
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
+        self.opener.addheaders = [("User-Agent", "Mozilla/5.0 MoodleHub/" + VERSION)]
+
+    def _get(self, url):
+        with self.opener.open(url, timeout=60) as r:
+            return r.geturl(), r.read().decode("utf-8", "replace")
+
+    def _signed_in(self, final_url, body):
+        # a signed-in Moodle page carries a session key and a logout link; the login page does neither
+        return "/login/" not in final_url and '"sesskey"' in body and "logout.php" in body
+
+    def page(self, path):
+        url = self.base + path
+        final, body = self._get(url)
+        if self._signed_in(final, body):
+            return body
+        self.login()
+        final, body = self._get(url)
+        if not self._signed_in(final, body):
+            raise MoodleError("לא הצלחתי להיכנס לדפי הקורסים", "weblogin")
+        return body
+
+    def login(self):
+        if not self.private_token:
+            raise MoodleError("needs reconnect", "noprivatetoken")
+        last = meta_get("autologin_at", 0) or 0
+        if time.time() - last < self.MIN_GAP:
+            raise MoodleError("auto-login rate limit", "autologinwait")
+        meta_set("autologin_at", time.time())
+        uid = (meta_get("site") or {}).get("userid") or self.m.call("core_webservice_get_site_info")["userid"]
+        res = self.m.call("tool_mobile_get_autologin_key", privatetoken=self.private_token)
+        q_ = urllib.parse.urlencode({"userid": uid, "key": res["key"], "urltogo": self.base + "/my/"})
+        self._get(res["autologinurl"] + ("&" if "?" in res["autologinurl"] else "?") + q_)
+        try: self.jar.save(ignore_discard=True, ignore_expires=True)
+        except Exception: pass
+
+class _HeaderParser(HTMLParser):
+    """Collects the exam and schedule tables (stored in data-table attributes) and syllabus links."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tables, self.syllabus, self._a = {}, [], None
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "button" and a.get("id") in ("exams", "course-groups") and a.get("data-table"):
+            self.tables[a["id"]] = a["data-table"]
+        if tag == "a" and "syllabus" in (a.get("href") or ""):
+            self._a = {"url": a["href"], "label": ""}
+    def handle_data(self, data):
+        if self._a is not None: self._a["label"] += data
+    def handle_endtag(self, tag):
+        if tag == "a" and self._a is not None:
+            self._a["label"] = self._a["label"].strip()
+            if self._a["url"] not in [x["url"] for x in self.syllabus]:
+                self.syllabus.append(self._a)
+            self._a = None
+
+def _table_rows(table_html):
+    rows = []
+    for tr in re.findall(r"(?is)<tr[^>]*>(.*?)</tr>", table_html or ""):
+        cells = [html_to_text(c) for c in re.findall(r"(?is)<t[dh][^>]*>(.*?)</t[dh]>", tr)]
+        if cells: rows.append(cells)
+    return rows
+
+DAY_HE = {"sun": "א", "mon": "ב", "tue": "ג", "wed": "ד", "thu": "ה", "fri": "ו", "sat": "ש"}
+TYPE_HE = {"lecture": "שיעור", "recitation": "תרגול", "tutorial": "תרגול", "lab": "מעבדה", "seminar": "סמינר"}
+MOED_HE = {"1": "א", "2": "ב", "3": "ג"}
+
+def parse_course_page(body):
+    p = _HeaderParser(); p.feed(body)
+    exams, schedule = [], []
+    for cells in _table_rows(p.tables.get("exams"))[1:]:
+        if len(cells) < 2: continue
+        m = re.match(r"(\d{1,2})[-./](\d{1,2})[-./](\d{4})", cells[0])
+        t = re.match(r"(\d{1,2}):(\d{2})", cells[1] if len(cells) > 1 else "")
+        if not m: continue
+        dt = datetime(int(m[3]), int(m[2]), int(m[1]), int(t[1]) if t else 9, int(t[2]) if t else 0)
+        kind = cells[2] if len(cells) > 2 else ""
+        if re.search(r"final", kind, re.I): kind = "מבחן סופי"
+        elif re.search(r"midterm|mid-term", kind, re.I): kind = "בוחן אמצע"
+        exams.append({"due": int(dt.timestamp()), "type": kind or "מבחן", "moed": cells[3] if len(cells) > 3 else ""})
+    for cells in _table_rows(p.tables.get("course-groups"))[1:]:
+        if len(cells) < 6: continue
+        typ, day = cells[2], cells[4]
+        schedule.append({"group": cells[0], "type": TYPE_HE.get(typ.lower(), typ),
+                         "day": DAY_HE.get(day.lower()[:3], day), "time": cells[5],
+                         "room": cells[6] if len(cells) > 6 else ""})
+    return exams, schedule, p.syllabus
+
+def collect_course_pages(cfg, cmap, items, add):
+    """Exam dates, weekly class schedule and syllabus links from each course page header."""
+    def keep_previous():
+        # a failed read must not make exams or the schedule look deleted: carry the last known ones over
+        for r in q("SELECT * FROM items WHERE id LIKE 'exam-%' AND gone=0"):
+            if r["id"] not in items:
+                add(r["id"], r["kind"], r["course_id"], json.loads(r["data"]))
+        for cid in cmap:
+            old = q("SELECT data FROM items WHERE id=?", (f"course-{cid}",), one=True)
+            if old and f"course-{cid}" in items:
+                od = json.loads(old["data"])
+                cur = items[f"course-{cid}"]["data"]
+                cur["schedule"] = od.get("schedule", [])
+                cur["links"] = cur.get("links", []) + [l for l in od.get("links", []) if l.get("from") == "header"]
+    if not cfg.get("private_token"):
+        meta_set("needs_reconnect", True)
+        return keep_previous()
+    key = (cfg["moodle_url"], cfg["token"])
+    web = _web_cache.get(key) or _web_cache.setdefault(key, MoodleWeb(cfg["moodle_url"], cfg["token"], cfg["private_token"]))
+    try:
+        for cid in cmap:
+            exams, schedule, syllabus = parse_course_page(web.page(f"/course/view.php?id={cid}"))
+            link = f"{web.base}/course/view.php?id={cid}"
+            for e in exams:
+                moed = MOED_HE.get(e["moed"], e["moed"])
+                add(f"exam-{cid}-{e['moed'] or e['due']}", "calevent", cid, {
+                    "title": e["type"] + (f" · מועד {moed}" if moed else ""), "start": e["due"], "duration": 0,
+                    "type": "exam", "module": None, "exam": True, "location": "", "description": "", "link": link})
+            c = items.get(f"course-{cid}")
+            if c:
+                c["data"]["schedule"] = schedule
+                have = {l["url"] for l in c["data"].get("links", [])}
+                c["data"]["links"] = [l for l in c["data"].get("links", []) if "SectionIDC" not in l["url"]] + \
+                    [{"kind": "syllabus", "title": s["label"], "url": s["url"], "from": "header"} for s in syllabus]
+        meta_set("needs_reconnect", False)
+        meta_set("pages_error", None)
+        log(f"course pages: {sum(1 for i in items if i.startswith('exam-'))} exams")
+    except MoodleError as e:
+        if e.code == "noprivatetoken":
+            meta_set("needs_reconnect", True)
+        elif e.code != "autologinwait":
+            meta_set("pages_error", str(e))
+        log("course pages:", e)
+        keep_previous()
+    except Exception as e:
+        log("course pages failed:", e)
+        keep_previous()
+
 def collect(m):
     """Pull everything from Moodle into a dict of items keyed by id."""
     site = m.call("core_webservice_get_site_info")
@@ -378,7 +536,7 @@ def collect(m):
 
     for c in courses:
         add(f"course-{c['id']}", "course", c["id"], {"title": cmap[c["id"]], "shortname": c.get("shortname"),
-            "url": f"{m.base}/course/view.php?id={c['id']}", "progress": c.get("progress"),
+            "url": f"{m.base}/course/view.php?id={c['id']}", "progress": c.get("progress"), "startdate": c.get("startdate") or None,
             "about": short(html_to_text(c.get("summary") or ""), 3000)})
 
     # Syllabus / exams / schedule links: look in the course description and the course's custom fields
@@ -568,6 +726,7 @@ def collect(m):
         except MoodleError:
             pass
 
+    collect_course_pages(load_config(), cmap, items, add)
     return site, items
 
 HE_DAYS = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
@@ -588,7 +747,7 @@ def sync(cfg, reason="scheduled"):
         m = Moodle(cfg["moodle_url"], cfg["token"])
         site, items = collect(m)
         meta_set("site", {"name": site.get("sitename"), "user": site.get("fullname"),
-                          "userpicture": site.get("userpictureurl")})
+                          "userpicture": site.get("userpictureurl"), "userid": site.get("userid")})
         first = not meta_get("synced_once", False)
         now = time.time()
         old = {r["id"]: dict(r) for r in q("SELECT * FROM items WHERE id NOT LIKE 'manual-%'")}
@@ -670,6 +829,8 @@ def send_change_notifications(cfg, changes):
             urgent = True
         elif kind == "new" and it["kind"] == "news":
             lines.append(f"📣 {c}: {heb(d['title'])} — {short(d.get('text'), 110)}")
+        elif kind == "new" and it["kind"] == "calevent" and d.get("exam") and (d.get("start") or 0) > time.time():
+            lines.append(f"🗓️ נקבע מבחן ב{c}: {heb(d['title'])} — {fmt_due(d.get('start'))}")
         elif kind == "new" and it["kind"] == "calevent" and (d.get("start") or 0) > time.time():
             lines.append(f"🗓️ חדש בלוח השנה{f' ({c})' if c else ''}: {heb(d['title'])} — {fmt_due(d.get('start'))}")
         elif kind == "moved":
@@ -694,7 +855,26 @@ def send_change_notifications(cfg, changes):
     body = "\n".join(lines[:8]) + (f"\nועוד {len(lines)-8}" if len(lines) > 8 else "")
     notify(cfg, title, body, priority=4 if urgent else 3, tags=["books"])
 
+def send_exam_reminders(cfg):
+    """A week and a day before each exam."""
+    now = time.time()
+    for r in q("SELECT * FROM items WHERE kind='calevent' AND id LIKE 'exam-%' AND gone=0"):
+        d = json.loads(r["data"])
+        left = (d.get("start") or 0) - now
+        if left <= 0 or left > 7 * 86400:
+            continue
+        win = "1d" if left <= 86400 else "7d"
+        if q("SELECT 1 FROM reminders WHERE task_id=? AND win=?", (r["id"], win), one=True):
+            continue
+        q("INSERT OR IGNORE INTO reminders(task_id,win) VALUES(?,?)", (r["id"], win))
+        if win == "1d":
+            q("INSERT OR IGNORE INTO reminders(task_id,win) VALUES(?,?)", (r["id"], "7d"))
+        when = "מחר" if win == "1d" else f"בעוד {int(left // 86400)} ימים"
+        notify(cfg, f"מבחן {when}: {heb(r['course'])}", f"{d['title']} · {fmt_due(d.get('start'))}",
+               url=d.get("link"), priority=4, tags=["calendar"])
+
 def send_reminders(cfg):
+    send_exam_reminders(cfg)
     now = time.time()
     done = {r["task_id"] for r in q("SELECT task_id FROM done")}
     for r in q("SELECT * FROM items WHERE kind='task' AND gone=0"):
@@ -748,7 +928,7 @@ def state():
         if k == "course":
             out["courses"].setdefault(str(r["course_id"]), {"materials": []}).update(
                 {"id": r["course_id"], "title": d["title"], "url": d["url"], "about": d.get("about", ""),
-                 "links": d.get("links", [])})
+                 "links": d.get("links", []), "schedule": d.get("schedule", []), "startdate": d.get("startdate")})
         elif k == "task":
             base.pop("fileurl", None)
             base["done"] = r["id"] in done
@@ -776,7 +956,9 @@ def state():
     out["meta"] = {"last_sync": meta_get("last_sync"), "error": meta_get("last_error"),
                    "running": sync_state["running"], "next": sync_state["next"],
                    "site": meta_get("site"), "moodle_url": cfg["moodle_url"],
-                   "can_summarize": bool(cfg.get("anthropic_api_key")), "now": time.time()}
+                   "can_summarize": bool(cfg.get("anthropic_api_key")), "now": time.time(),
+                   "needs_reconnect": bool(meta_get("needs_reconnect", False)) and bool(cfg.get("token")),
+                   "pages_error": meta_get("pages_error"), "semester_end": cfg.get("semester_end") or ""}
     return out
 
 def _private(ip):
@@ -910,7 +1092,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/settings":
             cfg = load_config()
             return self.send_json({k: cfg[k] for k in ("moodle_url", "ntfy_server", "ntfy_topic", "sync_minutes",
-                                   "quiet_hours", "public_url", "summary_model")} |
+                                   "quiet_hours", "public_url", "summary_model", "semester_end")} |
                                   {"has_token": bool(cfg["token"]), "has_api_key": bool(cfg["anthropic_api_key"]),
                                    "launch_url": launch_url(cfg["moodle_url"]), "lan": lan_ips(), "port": cfg["port"],
                                    "local": is_local(self.client_address[0])})
@@ -975,7 +1157,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"error": "בחרו קוד גישה (לפחות 4 תווים), כדי שהטלפון יוכל להתחבר."}, 400)
             if "token" in data and data["token"]:
                 try:
-                    tok = parse_token(data["token"])
+                    tok, ptok = parse_token(data["token"])
                 except ValueError as e:
                     return self.send_json({"error": str(e)}, 400)
                 url = (data.get("moodle_url") or cfg["moodle_url"]).strip().rstrip("/")
@@ -983,7 +1165,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     site = Moodle(url, tok).call("core_webservice_get_site_info")
                 except MoodleError as e:
                     return self.send_json({"error": f"מודל לא קיבל את ההתחברות: {e}"}, 400)
-                cfg["token"], cfg["moodle_url"] = tok, url
+                cfg["token"], cfg["moodle_url"], cfg["private_token"] = tok, url, ptok
+                _web_cache.clear()
                 meta_set("site", {"name": site.get("sitename"), "user": site.get("fullname")})
             if data.get("passcode"):
                 if len(str(data["passcode"])) < 4:
@@ -993,6 +1176,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 cfg["passcode_salt"] = secrets.token_hex(8)
                 cfg["passcode_hash"] = hash_pass(str(data["passcode"]), cfg["passcode_salt"])
                 q("DELETE FROM sessions")
+            if isinstance(data.get("semester_end"), str) and re.fullmatch(r"(\d{4}-\d{2}-\d{2})?", data["semester_end"].strip()):
+                cfg["semester_end"] = data["semester_end"].strip()
             for k in ("ntfy_server", "ntfy_topic", "public_url", "summary_model"):
                 if isinstance(data.get(k), str) and data[k].strip():
                     cfg[k] = data[k].strip()

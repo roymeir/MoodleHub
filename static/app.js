@@ -3,6 +3,8 @@
 
 const $ = (s, el = document) => el.querySelector(s);
 const view = $("#view");
+const _rc = view.replaceChildren.bind(view);
+view.replaceChildren = (...kids) => _rc(...kids.flat().filter((k) => k != null && k !== false));
 let S = null;               // last state from the server
 let tab = "today";
 let courseOpen = null;
@@ -155,7 +157,11 @@ function header() {
   sy.textContent = m.running ? T("מסנכרן…", "Syncing…") : m.error ? T("בעיה בסנכרון", "Sync problem") : m.last_sync ? T(`עודכן ${ago(m.last_sync)}`, `Updated ${ago(m.last_sync)}`) : T("ממתין לסנכרון הראשון…", "Waiting for the first sync…");
   $("#btn-sync").classList.toggle("spin", !!m.running);
   const b = $("#banner");
-  if (m.error) { b.hidden = false; b.replaceChildren(B(m.error)); } else b.hidden = true;
+  if (m.error) { b.hidden = false; b.className = "banner"; b.replaceChildren(B(m.error)); }
+  else if (m.needs_reconnect) { b.hidden = false; b.className = "banner info";
+    b.replaceChildren(T("כדי לקבל מועדי מבחנים, מערכת שעות וסילבוס, התחברו מחדש למודל פעם אחת ", "To get exam dates, your class schedule and syllabus, reconnect Moodle once "),
+      h("button", { text: T("בהגדרות", "in Settings"), onclick: settingsSheet }), "."); }
+  else b.hidden = true;
   let seen = 0; try { seen = +localStorage.getItem("seenNews") || 0; } catch { }
   $("#dot-updates").hidden = !S.news.some((n) => (n.first_seen || 0) > seen && isNew(n));
 }
@@ -199,6 +205,9 @@ function renderToday() {
   const nodate = open.filter((t) => !t.due);
   const out = [];
   const group = (label, list) => list.length && out.push(h("div", { class: "label", text: label }), ...list.map(taskRow));
+  const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+  const todays = classItems(t0 / 1000, t0 / 1000 + 86400).filter((c) => c.until > n).sort((a, b) => a.at - b.at);
+  if (todays.length) out.push(h("div", { class: "label", text: T("היום בקמפוס", "On campus today") }), ...todays.map((c) => calRow(c)));
   group(T("באיחור", "Overdue"), overdue);
   group(T("השבוע", "This week"), week);
   group(T("בהמשך", "Later"), later);
@@ -212,11 +221,24 @@ function renderToday() {
       text: showDone ? T("הסתרת מטלות שהושלמו", "Hide completed tasks") : T(`הצגת ${finished.length} מטלות שהושלמו`, `Show ${finished.length} completed tasks`) }));
     if (showDone) out.push(...finished.map(taskRow));
   }
+  const exams = (S.calendar || []).filter((e) => e.exam && e.start > n).sort((a, b) => a.start - b.start);
+  if (exams.length) out.push(h("div", { class: "label", text: T("מבחנים", "Exams") }), ...exams.map(examRow));
   const fresh = S.news.filter(isNew).slice(0, 2);
   if (fresh.length) {
     out.push(h("div", { class: "label", text: T("הודעות חדשות", "New announcements") }), ...fresh.map(newsCard));
   }
   view.replaceChildren(...out);
+}
+
+function examRow(e) {
+  const d = e.start - now();
+  return h("div", { class: "card task exam", onclick: () => calSheet(e) },
+    h("div", { class: "date" },
+      h("div", { class: "d", text: fmtDate(e.start, { day: "numeric" }) }),
+      h("div", { class: "m", text: fmtDate(e.start, { month: "short" }) })),
+    h("div", { class: "body" }, h("div", { class: "t" }, B(e.course)),
+      h("div", { class: "c" }, ...line(e.title, fmtDate(e.start, { hour: "2-digit", minute: "2-digit" })))),
+    h("span", { class: "chip exam", text: d < 86400 ? T("מחר", "Tomorrow") : T(`עוד ${Math.ceil(d / 86400)} ימים`, `${Math.ceil(d / 86400)} days`) }));
 }
 
 function openSheet(...kids) {
@@ -352,12 +374,18 @@ function renderCourse(c) {
     h("div", { class: "ctitle" }, B(c.title)),
     h("a", { class: "clink", href: c.url, target: "_blank", rel: "noopener", text: T("פתיחת הקורס במודל", "Open course in Moodle") }),
   ];
-  const extra = (c.links || []).filter((l) => l.kind !== "syllabus");
+  const extra = (c.links || []).filter((l) => l.kind !== "syllabus" && !(l.kind === "schedule" && (c.schedule || []).length));
   if (extra.length) out.push(h("div", { class: "btns", style: "margin-top:12px" }, ...extra.map((l) =>
     h("a", { class: "btn soft", href: l.url, target: "_blank", rel: "noopener",
       text: l.kind === "exams" ? T("מבחנים", "Exams") : T("מערכת שעות", "Schedule") }))));
   const tasks = S.tasks.filter((t) => t.course_id === c.id && !t.done && !t.submitted);
   if (tasks.length) out.push(h("div", { class: "label", text: T("להגשה", "Due") }), ...tasks.map(taskRow));
+  if (c.schedule && c.schedule.length) out.push(h("div", { class: "label", text: T("מערכת שעות", "Weekly schedule") }),
+    h("div", { class: "card" }, ...c.schedule.map((s) => h("div", { class: "grade" },
+      h("span", {}, B(T(s.type, TYPE_EN[s.type] || s.type)), " · ", B(T(`יום ${s.day}`, DAY_EN[DAY_IDX[s.day]] || s.day))),
+      h("span", { class: "muted" }, ...line(s.time, s.room))))));
+  const exams = (S.calendar || []).filter((e) => e.exam && e.course_id === c.id).sort((a, b) => a.start - b.start);
+  if (exams.length) out.push(h("div", { class: "label", text: T("מבחנים", "Exams") }), ...exams.map(examRow));
   out.push(...syllabusSection(c));
   if (summarized.length) {
     out.push(h("div", { class: "label", text: T("בקצרה", "In short") }));
@@ -397,6 +425,34 @@ let calDay = null;          // selected day, "y-m-d"
 const dayKey = (d) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 const EXAM = /מבחן|בחינ|מועד [אבג]׳?|בוחן|exam|midterm|final|quiz|\btest\b/i;
 
+// Weekly classes and recitations, from each course page's schedule, until the semester ends
+const DAY_IDX = { "א": 0, "ב": 1, "ג": 2, "ד": 3, "ה": 4, "ו": 5, "ש": 6 };
+const DAY_NAME = ["א", "ב", "ג", "ד", "ה", "ו", "ש"], DAY_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const TYPE_EN = { "שיעור": "Lecture", "תרגול": "Recitation", "מעבדה": "Lab", "סמינר": "Seminar" };
+function semesterEnd() {
+  if (S.meta.semester_end) return new Date(S.meta.semester_end + "T23:59").getTime() / 1000;
+  const exams = (S.calendar || []).filter((e) => e.exam).map((e) => e.start);
+  return exams.length ? Math.min(...exams) - 7 * 86400 : now() + 16 * 7 * 86400;
+}
+function classItems(fromTs, toTs) {
+  const out = [], end = Math.min(toTs, semesterEnd());
+  for (const c of Object.values(S.courses)) {
+    for (const s of c.schedule || []) {
+      const wd = DAY_IDX[s.day], m = (s.time || "").match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
+      if (wd == null || !m) continue;
+      const d = new Date(Math.max(fromTs, c.startdate || 0) * 1000); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + ((wd - d.getDay() + 7) % 7));
+      for (; d.getTime() / 1000 < end; d.setDate(d.getDate() + 7)) {
+        const a = new Date(d); a.setHours(+m[1], +m[2]);
+        const b = new Date(d); b.setHours(+m[3], +m[4]);
+        if (a.getTime() / 1000 >= end) break;
+        out.push({ kind: "class", at: a.getTime() / 1000, until: b.getTime() / 1000, course: c.title, course_id: c.id,
+          title: T(s.type, TYPE_EN[s.type] || s.type), room: s.room, open: null });
+      }
+    }
+  }
+  return out;
+}
+
 // Deadlines (tasks) and everything else in the Moodle calendar, as one list
 function calItems() {
   const due = S.tasks.filter((t) => t.due).map((t) => ({ kind: "due", at: t.due, title: t.title, course: t.course,
@@ -404,13 +460,20 @@ function calItems() {
   const other = (S.calendar || []).filter((e) => e.start).map((e) => ({
     kind: e.module === "quiz" || EXAM.test(e.title) ? "exam" : "event", at: e.start, title: e.title, course: e.course,
     open: () => calSheet(e) }));
-  return [...due, ...other].sort((a, b) => a.at - b.at);
+  const from = now() - 45 * 86400;
+  return [...due, ...other, ...classItems(from, now() + 200 * 86400)].sort((a, b) => a.at - b.at);
 }
-const KIND_TEXT = { due: () => T("הגשה", "Due"), exam: () => T("מבחן", "Exam"), event: () => T("אירוע", "Event") };
+const KIND_TEXT = { class: () => T("שיעור", "Class"), due: () => T("הגשה", "Due"), exam: () => T("מבחן", "Exam"), event: () => T("אירוע", "Event") };
 const fmtTime = (ts) => { const d = new Date(ts * 1000);
   return d.getHours() || d.getMinutes() ? fmtDate(ts, { hour: "2-digit", minute: "2-digit" }) : T("כל היום", "All day"); };
 
 function calRow(it, showDate) {
+  if (it.kind === "class") return h("div", { class: "card ev class" },
+    h("span", { class: "bar class" }),
+    h("div", { class: "when" }, h("div", { class: "a", text: fmtDate(it.at, { hour: "2-digit", minute: "2-digit" }) }),
+      h("div", { class: "b", text: fmtDate(it.until, { hour: "2-digit", minute: "2-digit" }) })),
+    h("div", { class: "body" }, h("div", { class: "t" }, B(it.course)),
+      h("div", { class: "c" }, ...line(showDate ? fmtDate(it.at, { weekday: "short", day: "numeric", month: "short" }) : null, it.title, it.room))));
   return h("div", { class: "card ev" + (it.done ? " isdone" : ""), onclick: it.open },
     h("span", { class: "bar " + it.kind }),
     h("div", { class: "body" },
@@ -451,7 +514,7 @@ function renderCalendar() {
         h("button", { class: "btn soft", style: "padding:8px 14px", text: T("היום", "Today"), onclick: () => { calMonth = null; render(); } }),
         h("button", { class: "icon-btn", "aria-label": T("החודש הבא", "Next month"), text: "›", onclick: () => go(1) }))),
     h("div", { class: "cal" }, h("div", { class: "cal-grid" }, ...weekdays, ...cells),
-      h("div", { class: "legend" }, ...["due", "exam", "event"].map((x) => h("span", {}, h("i", { class: x }), KIND_TEXT[x]())))),
+      h("div", { class: "legend" }, ...["class", "due", "exam", "event"].map((x) => h("span", {}, h("i", { class: x }), KIND_TEXT[x]())))),
   ];
   if (calDay) {
     const [y, m, d] = calDay.split("-").map(Number), its = byDay.get(calDay) || [];
@@ -459,7 +522,7 @@ function renderCalendar() {
     if (its.length) out.push(...its.map((it) => calRow(it)));
     else out.push(h("div", { class: "empty", style: "padding-top:4px", text: T("אין כלום ביום הזה.", "Nothing on this day.") }));
   }
-  const soon = items.filter((it) => it.at > now() && !it.done && dayKey(new Date(it.at * 1000)) !== calDay).slice(0, 6);
+  const soon = items.filter((it) => it.kind !== "class" && it.at > now() && !it.done && dayKey(new Date(it.at * 1000)) !== calDay).slice(0, 6);
   if (soon.length) out.push(h("div", { class: "label", text: T("בקרוב", "Coming up") }), ...soon.map((it) => calRow(it, true)));
   if (!items.length) out.push(h("div", { class: "empty", text: S.meta.last_sync ? T("אין אירועים בלוח השנה של מודל.", "No events in your Moodle calendar.") : T("הלוח יתמלא אחרי הסנכרון הבא.", "The calendar fills in after the next sync.") }));
   view.replaceChildren(...out);
@@ -580,6 +643,7 @@ async function settingsSheet() {
   const qe = h("input", { type: "number", min: 0, max: 23, value: st.quiet_hours[1], style: "width:45%" });
   const pass = h("input", { type: "password", autocomplete: "new-password", placeholder: T("לפחות 4 תווים", "At least 4 characters") });
   const key = h("input", { type: "password", dir: "ltr", placeholder: st.has_api_key ? T("שמור, הקלידו כדי להחליף", "Saved, type to replace") : "sk-ant-…" });
+  const semEnd = h("input", { type: "date", value: st.semester_end || "" });
   openSheet(h("h3", { text: T("הגדרות", "Settings") }),
     h("div", { class: "sub", text: st.has_token ? T("מחובר למודל", "Connected to Moodle") : T("לא מחובר", "Not connected") }),
     st.local ? f(T("קוד גישה לטלפון", "Phone passcode"), pass,
@@ -590,6 +654,7 @@ async function settingsSheet() {
     f(T("בדיקת עדכונים במודל", "Check Moodle for updates"), mins),
     h("div", { class: "field" }, h("label", { text: T("שעות שקטות (רק התראות דחופות): משעה עד שעה", "Quiet hours (urgent notifications only): from hour to hour") }),
       h("div", { style: "display:flex;gap:10%;align-items:center" }, qs, qe)),
+    f(T("סוף הסמסטר (עד מתי להציג שיעורים ביומן)", "Semester end (show classes until)"), semEnd, T("השאירו ריק: עד שבוע לפני המבחן הראשון.", "Leave empty: until a week before the first exam.")),
     f(T("כתובת ה-Hub מחוץ לבית", "Hub address away from home"), pub, T("לחיצה על התראה תפתח את הכתובת הזו. השאירו ריק אם אתם משתמשים רק ב-Wi-Fi של הבית.", "Tapping a notification opens this address. Leave it empty if you only use your home Wi-Fi.")),
     f(T("תקצירים: מפתח API של Anthropic (לא חובה)", "Summaries: Anthropic API key (optional)"), key, T("מאפשר ל-Hub לכתוב תקציר קצר לכל חומר חדש.", "Lets the Hub write a short summary of every new material.")),
     h("div", { class: "label", text: T("חיבור מחדש למודל", "Reconnect to Moodle") }),
@@ -601,7 +666,7 @@ async function settingsSheet() {
       h("button", { class: "btn", text: T("שמירה", "Save"), onclick: async () => {
         try {
           await api("/api/setup", { method: "POST", body: { token: tok.value || undefined, ntfy_topic: topic.value, public_url: pub.value,
-            sync_minutes: +mins.value, quiet_hours: [+qs.value, +qe.value], anthropic_api_key: key.value ? key.value : undefined,
+            sync_minutes: +mins.value, quiet_hours: [+qs.value, +qe.value], semester_end: semEnd.value, anthropic_api_key: key.value ? key.value : undefined,
             passcode: pass.value || undefined } });
           closeSheet(); toast(T("נשמר", "Saved")); refresh(true);
         } catch (e) { err.textContent = e.message; }
