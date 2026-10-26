@@ -1,5 +1,5 @@
 // Lets the Hub be added to your home screen. Shows the last screen if the computer is briefly unreachable.
-
+const CACHE = "hub-shell-v4";
 const SHELL = ["/", "/static/app.css", "/static/app.js", "/manifest.json", "/icon.svg"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
