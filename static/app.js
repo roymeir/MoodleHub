@@ -163,7 +163,7 @@ function header() {
 function render() {
   document.querySelectorAll("#tabbar button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
   if (!S) return;
-  ({ today: renderToday, courses: renderCourses, updates: renderUpdates, grades: renderGrades })[tab]();
+  ({ today: renderToday, calendar: renderCalendar, courses: renderCourses, updates: renderUpdates, grades: renderGrades })[tab]();
 }
 
 // ── היום ──
@@ -381,6 +381,90 @@ function matSheet(m) {
   draw();
 }
 
+// ── לוח שנה ──
+let calMonth = null;        // first day of the month on screen
+let calDay = null;          // selected day, "y-m-d"
+const dayKey = (d) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+const EXAM = /מבחן|בחינ|מועד [אבג]׳?|בוחן|exam|midterm|final|quiz|\btest\b/i;
+
+// Deadlines (tasks) and everything else in the Moodle calendar, as one list
+function calItems() {
+  const due = S.tasks.filter((t) => t.due).map((t) => ({ kind: "due", at: t.due, title: t.title, course: t.course,
+    done: t.done || t.submitted, open: () => taskSheet(t) }));
+  const other = (S.calendar || []).filter((e) => e.start).map((e) => ({
+    kind: e.module === "quiz" || EXAM.test(e.title) ? "exam" : "event", at: e.start, title: e.title, course: e.course,
+    open: () => calSheet(e) }));
+  return [...due, ...other].sort((a, b) => a.at - b.at);
+}
+const KIND_TEXT = { due: () => T("הגשה", "Due"), exam: () => T("מבחן", "Exam"), event: () => T("אירוע", "Event") };
+const fmtTime = (ts) => { const d = new Date(ts * 1000);
+  return d.getHours() || d.getMinutes() ? fmtDate(ts, { hour: "2-digit", minute: "2-digit" }) : T("כל היום", "All day"); };
+
+function calRow(it, showDate) {
+  return h("div", { class: "card ev" + (it.done ? " isdone" : ""), onclick: it.open },
+    h("span", { class: "bar " + it.kind }),
+    h("div", { class: "body" },
+      h("div", { class: "t" }, B(it.title)),
+      h("div", { class: "c" }, ...line(it.course, showDate ? fmtDate(it.at, { weekday: "short", day: "numeric", month: "short" }) : null, fmtTime(it.at)))),
+    h("span", { class: "chip " + it.kind, text: it.done ? T("בוצע", "Done") : KIND_TEXT[it.kind]() }));
+}
+
+function renderCalendar() {
+  const today = new Date();
+  if (!calMonth) { calMonth = new Date(today.getFullYear(), today.getMonth(), 1); calDay = dayKey(today); }
+  const items = calItems();
+  const byDay = new Map();
+  for (const it of items) { const k = dayKey(new Date(it.at * 1000)); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(it); }
+  const go = (n) => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + n, 1); calDay = null; render(); };
+
+  // the grid starts on the Sunday on or before the 1st and runs whole weeks
+  const first = new Date(calMonth); first.setDate(1 - first.getDay());
+  const weeks = Math.ceil((calMonth.getDay() + new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 0).getDate()) / 7);
+  const cells = [];
+  for (let i = 0; i < weeks * 7; i++) {
+    const d = new Date(first.getFullYear(), first.getMonth(), first.getDate() + i), k = dayKey(d), its = byDay.get(k) || [];
+    const kinds = [...new Set(its.map((x) => x.kind))];
+    cells.push(h("button", { class: "cal-d" + (d.getMonth() !== calMonth.getMonth() ? " out" : "") + (k === dayKey(today) ? " today" : "") + (k === calDay ? " sel" : ""),
+      onclick: () => { calDay = k; render(); } },
+      h("span", { class: "n", text: d.getDate() }),
+      h("span", { class: "dots" }, ...kinds.map((x) => h("i", { class: x })))));
+  }
+  const weekdays = Array.from({ length: 7 }, (_, i) => h("div", { class: "cal-wd",
+    text: new Date(2023, 0, 1 + i).toLocaleString(LOCALE, { weekday: "narrow" }) }));   // 1 Jan 2023 was a Sunday
+
+  // the arrows are mirrored automatically in Hebrew, so "‹" always means "back"
+  const out = [
+    h("div", { class: "cal-head" },
+      h("div", { class: "m", text: calMonth.toLocaleString(LOCALE, { month: "long", year: "numeric" }) }),
+      h("div", { class: "cal-nav" },
+        h("button", { class: "icon-btn", "aria-label": T("החודש הקודם", "Previous month"), text: "‹", onclick: () => go(-1) }),
+        h("button", { class: "btn soft", style: "padding:8px 14px", text: T("היום", "Today"), onclick: () => { calMonth = null; render(); } }),
+        h("button", { class: "icon-btn", "aria-label": T("החודש הבא", "Next month"), text: "›", onclick: () => go(1) }))),
+    h("div", { class: "cal" }, h("div", { class: "cal-grid" }, ...weekdays, ...cells),
+      h("div", { class: "legend" }, ...["due", "exam", "event"].map((x) => h("span", {}, h("i", { class: x }), KIND_TEXT[x]())))),
+  ];
+  if (calDay) {
+    const [y, m, d] = calDay.split("-").map(Number), its = byDay.get(calDay) || [];
+    out.push(h("div", { class: "label", text: new Date(y, m - 1, d).toLocaleString(LOCALE, { weekday: "long", day: "numeric", month: "long" }) }));
+    if (its.length) out.push(...its.map((it) => calRow(it)));
+    else out.push(h("div", { class: "empty", style: "padding-top:4px", text: T("אין כלום ביום הזה.", "Nothing on this day.") }));
+  }
+  const soon = items.filter((it) => it.at > now() && !it.done && dayKey(new Date(it.at * 1000)) !== calDay).slice(0, 6);
+  if (soon.length) out.push(h("div", { class: "label", text: T("בקרוב", "Coming up") }), ...soon.map((it) => calRow(it, true)));
+  if (!items.length) out.push(h("div", { class: "empty", text: S.meta.last_sync ? T("אין אירועים בלוח השנה של מודל.", "No events in your Moodle calendar.") : T("הלוח יתמלא אחרי הסנכרון הבא.", "The calendar fills in after the next sync.") }));
+  view.replaceChildren(...out);
+}
+
+function calSheet(e) {
+  const dur = e.duration ? fmtDate(e.start + e.duration, { hour: "2-digit", minute: "2-digit" }) : null;
+  openSheet(
+    h("h3", {}, B(e.title)),
+    h("div", { class: "sub" }, ...line(e.course, fmtDue(e.start) + (dur ? ` – ${dur}` : ""), e.location)),
+    e.description ? h("div", { class: "txt", dir: "auto", text: e.description }) : null,
+    h("div", { class: "btns" }, e.link ? h("a", { class: "btn", href: e.link, target: "_blank", rel: "noopener", text: T("פתיחה במודל", "Open in Moodle") }) : null,
+      h("button", { class: "btn soft", text: T("סגירה", "Close"), onclick: closeSheet })));
+}
+
 // ── עדכונים ──
 function newsCard(n) {
   const x = h("div", { class: "x clip", dir: "auto", text: n.text });
@@ -521,7 +605,7 @@ async function settingsSheet() {
 // ── wiring ──
 // The page itself ships in Hebrew; relabel it for English, and offer the other language
 if (LANG === "en") {
-  const tabs = { today: "Today", courses: "Courses", updates: "Announcements", grades: "Grades" };
+  const tabs = { today: "Today", calendar: "Calendar", courses: "Courses", updates: "Updates", grades: "Grades" };
   document.querySelectorAll("#tabbar button").forEach((b) => ($("span", b).textContent = tabs[b.dataset.tab]));
   for (const [id, label] of [["btn-sync", "Sync now"], ["btn-settings", "Settings"]]) {
     $("#" + id).setAttribute("aria-label", label); $("#" + id).title = label;

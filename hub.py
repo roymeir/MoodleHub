@@ -430,6 +430,24 @@ def collect(m):
     except MoodleError as e:
         log("timeline failed:", e)
 
+    # The whole Moodle calendar: exam dates, course and site events, quiz windows, your own events
+    try:
+        cal = m.call("core_calendar_get_calendar_events", events={"courseids": list(cmap)},
+                     options={"userevents": 1, "siteevents": 1, "timestart": int(now - 45 * 86400),
+                              "timeend": int(now + 200 * 86400), "ignorehidden": 1})
+        for e in cal.get("events", []):
+            # deadlines are already tasks (from assignments or the timeline above)
+            if f"event-{e['id']}" in items or (e.get("modulename") == "assign" and e.get("eventtype") == "due"):
+                continue
+            cid = e.get("courseid") if e.get("courseid") in cmap else None
+            add(f"cal-{e['id']}", "calevent", cid, {"title": html.unescape(e.get("name", "")),
+                "start": e.get("timestart"), "duration": e.get("timeduration") or 0,
+                "type": e.get("eventtype"), "module": e.get("modulename") or None, "location": e.get("location") or "",
+                "description": short(html_to_text(e.get("description", "")), 800),
+                "link": e.get("url") or (f"{m.base}/calendar/view.php?view=day&time={e.get('timestart')}")})
+    except MoodleError as e:
+        log("calendar failed:", e)
+
     # Announcements (news forums) and other forum discussions
     try:
         forums = m.call("mod_forum_get_forums_by_courses", courseids=list(cmap))
@@ -522,6 +540,8 @@ def sync(cfg, reason="scheduled"):
                         if it["kind"] == "task" and od.get("due") != it["data"].get("due"):
                             changes.append(("due", it, od.get("due")))
                             con().execute("DELETE FROM reminders WHERE task_id=?", (it["id"],))
+                        if it["kind"] == "calevent" and od.get("start") != it["data"].get("start"):
+                            changes.append(("moved", it, od.get("start")))
                         if it["kind"] in ("grade",) and od.get("grade") != it["data"].get("grade"):
                             changes.append(("grade", it, od.get("grade")))
             gone = [i for i in old if i not in items and not old[i]["gone"]]
@@ -580,6 +600,11 @@ def send_change_notifications(cfg, changes):
             urgent = True
         elif kind == "new" and it["kind"] == "news":
             lines.append(f"📣 {c}: {heb(d['title'])} — {short(d.get('text'), 110)}")
+        elif kind == "new" and it["kind"] == "calevent" and (d.get("start") or 0) > time.time():
+            lines.append(f"🗓️ חדש בלוח השנה{f' ({c})' if c else ''}: {heb(d['title'])} — {fmt_due(d.get('start'))}")
+        elif kind == "moved":
+            lines.append(f"🗓️ התאריך השתנה{f' ({c})' if c else ''}: {heb(d['title'])} — עכשיו {fmt_due(d.get('start'))}")
+            urgent = True
         elif kind == "new" and it["kind"] in ("file", "material"):
             lines.append(f"📄 חדש ב{c}: {heb(d['title'])}")
         elif kind in ("grade",) or (kind == "new" and it["kind"] == "grade"):
@@ -644,7 +669,7 @@ def state():
     done = {r["task_id"]: r["at"] for r in q("SELECT * FROM done")}
     sums = {r["file_id"]: r["text"] for r in q("SELECT * FROM summaries")}
     rows = q("SELECT * FROM items WHERE gone=0")
-    out = {"tasks": [], "courses": {}, "news": [], "grades": {}, "events": []}
+    out = {"tasks": [], "courses": {}, "news": [], "grades": {}, "events": [], "calendar": []}
     for r in rows:
         d = json.loads(r["data"])
         base = {"id": r["id"], "course": r["course"], "course_id": r["course_id"], "first_seen": r["first_seen"], **d}
@@ -663,6 +688,8 @@ def state():
             out["courses"].setdefault(str(r["course_id"]), {"materials": []})["materials"].append(base)
         elif k == "news":
             out["news"].append(base)
+        elif k == "calevent":
+            out["calendar"].append(base)
         elif k in ("grade", "coursegrade"):
             g = out["grades"].setdefault(str(r["course_id"]), {"course": r["course"], "items": [], "total": None})
             if k == "coursegrade": g["total"] = d["grade"]
