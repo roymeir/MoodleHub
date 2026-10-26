@@ -197,6 +197,20 @@ def html_to_text(s):
     s = re.sub(r"\n\s*\n+", "\n\n", s)
     return s.strip()
 
+# Moodle names often carry both languages ("Complexity Theoryתורת הסיבוכיות"); notifications are in Hebrew,
+# so keep only the Hebrew half. Text with no Hebrew (e.g. "Exercise 1") is left as it is.
+_EN_RUN = re.compile(r"(?<![.\w])[A-Za-z][A-Za-z'’&.+#-]*(?:\s+(?:[A-Za-z][A-Za-z'’&.+#-]*|\d+[A-Za-z]*\b(?![\u0590-\u05FF])))*")
+def heb(s):
+    s = s or ""
+    if not re.search(r"[\u0590-\u05FF]", s) or not re.search(r"(?<![.\w])[A-Za-z]{2,}", s):
+        return s
+    out = _EN_RUN.sub(" ", s)
+    out = re.sub(r"\(\s*\)|\[\s*\]", " ", out)
+    out = re.sub(r"\s*([-–—|/·,:])(?:\s*[-–—|/·,:])+\s*", r" \1 ", out)
+    out = re.sub(r"\s*[-–—|/·,:]\s*(?=\()", " ", out)
+    out = re.sub(r"^[\s\-–—|/\\:·,.?!_()\[\]]+|[\s\-–—|/\\:·,.?!_(\[]+$", "", out)
+    return re.sub(r"\s{2,}", " ", out).strip() or s
+
 def short(s, n):
     s = re.sub(r"\s+", " ", s or "").strip()
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
@@ -543,19 +557,19 @@ def send_change_notifications(cfg, changes):
     lines = []
     urgent = False
     for kind, it, prev in changes:
-        d, c = it["data"], short(it["course"], 28)
+        d, c = it["data"], short(heb(it["course"]), 28)
         if kind == "new" and it["kind"] == "task":
-            lines.append(f"📝 מטלה חדשה ב{c}: {d['title']} — להגשה {fmt_due(d.get('due'))}")
+            lines.append(f"📝 מטלה חדשה ב{c}: {heb(d['title'])} — להגשה {fmt_due(d.get('due'))}")
             urgent = True
         elif kind == "due":
-            lines.append(f"📅 מועד ההגשה השתנה ({c}): {d['title']} — עכשיו {fmt_due(d.get('due'))}")
+            lines.append(f"📅 מועד ההגשה השתנה ({c}): {heb(d['title'])} — עכשיו {fmt_due(d.get('due'))}")
             urgent = True
         elif kind == "new" and it["kind"] == "news":
-            lines.append(f"📣 {c}: {d['title']} — {short(d.get('text'), 110)}")
+            lines.append(f"📣 {c}: {heb(d['title'])} — {short(d.get('text'), 110)}")
         elif kind == "new" and it["kind"] in ("file", "material"):
-            lines.append(f"📄 חדש ב{c}: {d['title']}")
+            lines.append(f"📄 חדש ב{c}: {heb(d['title'])}")
         elif kind in ("grade",) or (kind == "new" and it["kind"] == "grade"):
-            lines.append(f"🎓 פורסם ציון ({c}): {d['title']} — {d.get('grade')}")
+            lines.append(f"🎓 פורסם ציון ({c}): {heb(d['title'])} — {d.get('grade')}")
             urgent = True
     if not lines:
         return
@@ -590,8 +604,8 @@ def send_reminders(cfg):
             q("INSERT OR IGNORE INTO reminders(task_id,win) VALUES(?,?)", (r["id"], "24h"))
         hrs = int(left // 3600)
         when = f"בעוד {hrs} שעות" if hrs >= 1 else f"בעוד {int(left//60)} דקות"
-        notify(cfg, f"להגשה {when}: {d['title']}",
-               f"{r['course']} · {fmt_due(due)}" + ("" if d.get("source") != "Moodle" else " · עדיין לא הוגש"),
+        notify(cfg, f"להגשה {when}: {heb(d['title'])}",
+               f"{heb(r['course'])} · {fmt_due(due)}" + ("" if d.get("source") != "Moodle" else " · עדיין לא הוגש"),
                url=d.get("link"), priority=5 if win == "3h" else 4, tags=["alarm_clock"])
 
 def sync_loop():
