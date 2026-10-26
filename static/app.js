@@ -322,14 +322,20 @@ const matRow = (m) => h("div", { class: "mat", onclick: () => matSheet(m) },
 const SYLLABUS = /syllab|סילבוס|סילאבוס|ת(?:ו)?כנית ה?קורס|מידע על הקורס|דרישות ה?קורס|course (?:outline|plan|info|description|requirements)/i;
 function syllabusSection(c) {
   const files = c.materials.filter((m) => SYLLABUS.test(`${m.title} ${m.filename || ""} ${m.folder || ""}`));
+  // links from the course page header (e.g. the university's syllabus system), one per course group
+  const links = (c.links || []).filter((l) => l.kind === "syllabus").map((l) =>
+    h("a", { class: "mat", href: l.url, target: "_blank", rel: "noopener" },
+      h("div", { class: "ic", text: "PDF" }),
+      h("div", { class: "t" }, h("div", { text: T("סילבוס", "Syllabus") }), l.title ? h("div", { class: "s" }, B(l.title)) : null),
+      h("span", { class: "arrow", text: "↗" })));
   const out = [h("div", { class: "label", text: T("סילבוס", "Syllabus") })];
-  if (files.length) out.push(h("div", { class: "sec" }, ...files.map(matRow)));
+  if (links.length || files.length) out.push(h("div", { class: "sec" }, ...links, ...files.map(matRow)));
   if (c.about) {
     const x = h("div", { class: "x clip", dir: "auto", text: c.about });
     out.push(h("div", { class: "card news", onclick: () => x.classList.toggle("clip"), style: "cursor:pointer" },
       h("div", { class: "c", text: T("תיאור הקורס במודל", "Course description in Moodle") }), x));
   }
-  if (!files.length && !c.about)
+  if (!links.length && !files.length && !c.about)
     out.push(h("div", { class: "empty", text: T("לא נמצא סילבוס בקורס הזה במודל.", "No syllabus found for this course in Moodle.") }));
   return out;
 }
@@ -346,6 +352,10 @@ function renderCourse(c) {
     h("div", { class: "ctitle" }, B(c.title)),
     h("a", { class: "clink", href: c.url, target: "_blank", rel: "noopener", text: T("פתיחת הקורס במודל", "Open course in Moodle") }),
   ];
+  const extra = (c.links || []).filter((l) => l.kind !== "syllabus");
+  if (extra.length) out.push(h("div", { class: "btns", style: "margin-top:12px" }, ...extra.map((l) =>
+    h("a", { class: "btn soft", href: l.url, target: "_blank", rel: "noopener",
+      text: l.kind === "exams" ? T("מבחנים", "Exams") : T("מערכת שעות", "Schedule") }))));
   const tasks = S.tasks.filter((t) => t.course_id === c.id && !t.done && !t.submitted);
   if (tasks.length) out.push(h("div", { class: "label", text: T("להגשה", "Due") }), ...tasks.map(taskRow));
   out.push(...syllabusSection(c));

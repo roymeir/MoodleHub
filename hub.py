@@ -224,6 +224,33 @@ def heb(s):
         return s
     return halves[0] if _is_he(halves[0]) else halves[1]
 
+SYLLABUS_URL = "https://syllabus.runi.ac.il/pdf/renderdocument?SectionIDC={}"
+_LINK_KINDS = (("syllabus", re.compile(r"syllab|סילבוס|SectionIDC", re.I)),
+               ("exams", re.compile(r"\bexams?\b|מבחנים|בחינות|מועדי", re.I)),
+               ("schedule", re.compile(r"schedule|מערכת שעות|לוח זמנים|timetable", re.I)))
+
+def course_links(text):
+    """Syllabus / exams / schedule links found in a piece of Moodle HTML or a custom field value."""
+    text = text or ""
+    found = []
+    for href, label in re.findall(r"<a\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", text, re.I | re.S):
+        label = html.unescape(re.sub(r"<[^>]+>", " ", label)).strip()
+        href = html.unescape(href)
+        for kind, rx in _LINK_KINDS:
+            if rx.search(href) or rx.search(label):
+                found.append({"kind": kind, "title": short(label, 60), "url": href}); break
+    linked = {f["url"] for f in found}
+    for url in re.findall(r"https?://[^\s\"'<>]+", text):
+        url = html.unescape(url)
+        if url in linked: continue
+        for kind, rx in _LINK_KINDS:
+            if rx.search(url):
+                found.append({"kind": kind, "title": "", "url": url}); break
+    for sid in re.findall(r"SectionIDC=(\d+)", text):
+        if not any(sid in f["url"] for f in found):
+            found.append({"kind": "syllabus", "title": "", "url": SYLLABUS_URL.format(sid)})
+    return found
+
 def short(s, n):
     s = re.sub(r"\s+", " ", s or "").strip()
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
@@ -354,6 +381,24 @@ def collect(m):
             "url": f"{m.base}/course/view.php?id={c['id']}", "progress": c.get("progress"),
             "about": short(html_to_text(c.get("summary") or ""), 3000)})
 
+    # Syllabus / exams / schedule links: look in the course description and the course's custom fields
+    links = {c["id"]: course_links(c.get("summary")) for c in courses}
+    try:
+        full = m.call("core_course_get_courses_by_field", field="ids", value=",".join(str(i) for i in cmap))
+        for fc in full.get("courses", []):
+            for f in fc.get("customfields") or []:
+                v = str(f.get("value") or "")
+                got = course_links(v)
+                # a bare number in a field named like a syllabus/section id
+                if not got and re.fullmatch(r"\d{4,}", v.strip()) and re.search(r"syllab|section", f.get("shortname", "") + f.get("name", ""), re.I):
+                    got = [{"kind": "syllabus", "title": "", "url": SYLLABUS_URL.format(v.strip())}]
+                links.setdefault(fc["id"], []).extend(got)
+            if not links.get(fc["id"]):
+                log(f"course {fc['id']}: no syllabus link; custom fields:",
+                    [(f.get("shortname"), short(str(f.get("value") or ""), 80)) for f in fc.get("customfields") or []])
+    except MoodleError as e:
+        log("course details failed:", e)
+
     # Course contents: sections, files, links, activities
     for cid in cmap:
         try:
@@ -361,6 +406,7 @@ def collect(m):
         except MoodleError as e:
             log(f"contents for course {cid} failed: {e}"); continue
         for si, sec in enumerate(sections):
+            links.setdefault(cid, []).extend(course_links(sec.get("summary")))
             sname = sec.get("name") or f"יחידה {si}"
             for mod in sec.get("modules", []):
                 if mod.get("visible") == 0 or mod.get("uservisible") is False:
@@ -370,6 +416,7 @@ def collect(m):
                 base = {"section": sname, "section_index": si, "module": mod.get("modname"),
                         "cmid": mod["id"], "link": link}
                 if mod.get("modname") == "label":
+                    links.setdefault(cid, []).extend(course_links(mod.get("description")))
                     continue
                 files = [f for f in (mod.get("contents") or []) if f.get("type") == "file"]
                 if mod.get("modname") == "resource" and files:
@@ -386,6 +433,12 @@ def collect(m):
                 else:
                     add(f"mod-{mod['id']}", "material", cid, {**base, "title": mname,
                         "description": short(html_to_text(mod.get("description", "")), 600)})
+
+    for cid, ls in links.items():
+        if f"course-{cid}" in items:
+            seen = set()
+            ls = [{**l, "url": urllib.parse.urljoin(m.base + "/", l["url"])} for l in ls]
+            items[f"course-{cid}"]["data"]["links"] = [l for l in ls if not (l["url"] in seen or seen.add(l["url"]))]
 
     # Assignments with submission status
     try:
@@ -677,7 +730,8 @@ def state():
         k = r["kind"]
         if k == "course":
             out["courses"].setdefault(str(r["course_id"]), {"materials": []}).update(
-                {"id": r["course_id"], "title": d["title"], "url": d["url"], "about": d.get("about", "")})
+                {"id": r["course_id"], "title": d["title"], "url": d["url"], "about": d.get("about", ""),
+                 "links": d.get("links", [])})
         elif k == "task":
             base.pop("fileurl", None)
             base["done"] = r["id"] in done
